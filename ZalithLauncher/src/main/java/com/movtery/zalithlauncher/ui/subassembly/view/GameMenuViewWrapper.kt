@@ -162,7 +162,7 @@ class GameMenuViewWrapper(
     }
 
     private fun getCurrentGravity(): FxGravity {
-        return when(AllSettings.gameMenuLocation.getValue()) {
+        return when (AllSettings.gameMenuLocation.getValue()) {
             "left_or_top" -> FxGravity.LEFT_OR_TOP
             "left_or_bottom" -> FxGravity.LEFT_OR_BOTTOM
             "right_or_top" -> FxGravity.RIGHT_OR_TOP
@@ -170,7 +170,7 @@ class GameMenuViewWrapper(
             "top_or_center" -> FxGravity.TOP_OR_CENTER
             "bottom_or_center" -> FxGravity.BOTTOM_OR_CENTER
             "center" -> FxGravity.CENTER
-            else -> FxGravity.CENTER
+            else -> FxGravity.LEFT_OR_BOTTOM
         }
     }
 }

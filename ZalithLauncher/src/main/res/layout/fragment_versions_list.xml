@@ -232,6 +232,11 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/profiles_path_create_new"/>
+                <com.movtery.zalithlauncher.ui.view.AnimButton
+                    android:id="@+id/pick_sd_card_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/profiles_path_pick_sd_card"/>
 
                 <com.movtery.zalithlauncher.ui.view.AnimButton
                     android:id="@+id/refresh_button"

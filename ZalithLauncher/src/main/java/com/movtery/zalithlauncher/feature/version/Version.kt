@@ -11,118 +11,153 @@ import net.kdt.pojavlaunch.Tools
 import java.io.File
 
 /**
- * Minecraft 版本，由版本名称进行区分
- * @param versionsFolder 版本所属的版本文件夹
- * @param versionPath 版本的路径
- * @param versionConfig 独立版本的配置
- * @param isValid 版本的有效性
+ * Represents a Minecraft version, identified by its version name.
+ *
+ * @param versionsFolder The parent versions directory that contains this version.
+ * @param versionPath The full path to this version folder.
+ * @param versionConfig The per-version configuration.
+ * @param isValid Whether this version is considered valid.
  */
 class Version(
     private val versionsFolder: String,
     private val versionPath: String,
     private val versionConfig: VersionConfig,
     private val isValid: Boolean
-) :Parcelable {
+) : Parcelable {
+
     /**
-     * 控制是否将当前账号视为离线账号启动游戏
+     * Controls whether the current account should be treated as an offline account when launching.
      */
     var offlineAccountLogin: Boolean = false
 
     /**
-     * 模组检查结果
+     * Result of the mod check, if available.
      */
     var modCheckResult: ModChecker.ModCheckResult? = null
 
     /**
-     * @return 获取版本所属的版本文件夹
+     * @return The parent versions directory for this version.
      */
     fun getVersionsFolder(): String = versionsFolder
 
     /**
-     * @return 获取版本文件夹
+     * @return The version folder.
      */
     fun getVersionPath(): File = File(versionPath)
 
     /**
-     * @return 获取版本名称
+     * @return The version name.
      */
     fun getVersionName(): String = getVersionPath().name
 
     /**
-     * @return 获取版本隔离配置
+     * @return The version configuration.
      */
-    fun getVersionConfig() = versionConfig
+    fun getVersionConfig(): VersionConfig = versionConfig
 
     /**
-     * @return 版本的有效性：是否存在版本JSON文件、版本文件夹是否存在
+     * @return Whether this version is valid, meaning the version folder still exists
+     * and it was recognized as a valid version when scanned.
      */
-    fun isValid() = isValid && getVersionPath().exists()
+    fun isValid(): Boolean = isValid && getVersionPath().exists()
 
     /**
-     * @return 是否开启了版本隔离
+     * @return Whether version isolation is enabled.
      */
-    fun isIsolation() = versionConfig.isIsolation()
+    fun isIsolation(): Boolean = versionConfig.isIsolation()
 
     /**
-     * @return 获取版本的游戏文件夹路径（若开启了版本隔离，则路径为版本文件夹）
+     * @return The game directory for this version.
+     *
+     * If version isolation is enabled, the version folder is used.
+     * If isolation is disabled and a custom path is set, that path is used.
+     * Otherwise, the default game directory is returned.
      */
     fun getGameDir(): File {
-        return if (versionConfig.isIsolation()) versionConfig.getVersionPath()
-        //未开启版本隔离可以使用自定义路径，如果自定义路径为空（则为未设置），那么返回默认游戏路径（.minecraft/）
-        else if (versionConfig.getCustomPath().isNotEmpty()) File(versionConfig.getCustomPath())
-        else File(ProfilePathHome.getGameHome())
+        return when {
+            versionConfig.isIsolation() -> versionConfig.getVersionPath()
+            versionConfig.getCustomPath().isNotEmpty() -> File(versionConfig.getCustomPath())
+            else -> File(ProfilePathHome.getGameHome())
+        }
     }
 
-    private fun String.getValueOrDefault(default: String): String = this.takeIf { it.isNotEmpty() } ?: default
+    private fun String.getValueOrDefault(default: String): String {
+        return takeIf { it.isNotEmpty() } ?: default
+    }
 
-    fun getRenderer(): String = versionConfig.getRenderer().getValueOrDefault(AllSettings.renderer.getValue())
+    fun getRenderer(): String {
+        return versionConfig.getRenderer().getValueOrDefault(AllSettings.renderer.getValue())
+    }
 
-    fun getDriver(): String = versionConfig.getDriver().getValueOrDefault(AllSettings.driver.getValue())
+    fun getDriver(): String {
+        return versionConfig.getDriver().getValueOrDefault(AllSettings.driver.getValue())
+    }
 
-    fun getJavaDir(): String = versionConfig.getJavaDir().getValueOrDefault(AllSettings.defaultRuntime.getValue())
+    fun getJavaDir(): String {
+        return versionConfig.getJavaDir().getValueOrDefault(AllSettings.defaultRuntime.getValue())
+    }
 
-    fun getJavaArgs(): String = versionConfig.getJavaArgs().getValueOrDefault(AllSettings.javaArgs.getValue())
+    fun getJavaArgs(): String {
+        return versionConfig.getJavaArgs().getValueOrDefault(AllSettings.javaArgs.getValue())
+    }
 
     fun getControl(): String {
         val configControl = versionConfig.getControl().removeSuffix("./")
-        return if (configControl.isNotEmpty()) File(PathManager.DIR_CTRLMAP_PATH, configControl).absolutePath
-        else File(AllSettings.defaultCtrl.getValue()).absolutePath
+        return if (configControl.isNotEmpty()) {
+            File(PathManager.DIR_CTRLMAP_PATH, configControl).absolutePath
+        } else {
+            File(AllSettings.defaultCtrl.getValue()).absolutePath
+        }
     }
 
-    fun getCustomInfo(): String = versionConfig.getCustomInfo().getValueOrDefault(AllSettings.versionCustomInfo.getValue())
-        .replace("[zl_version]", ZHTools.getVersionName())
+    fun getCustomInfo(): String {
+        return versionConfig
+            .getCustomInfo()
+            .getValueOrDefault(AllSettings.versionCustomInfo.getValue())
+            .replace("[zl_version]", ZHTools.getVersionName())
+    }
 
     fun getVersionInfo(): VersionInfo? {
         return runCatching {
             val infoFile = File(VersionsManager.getZalithVersionPath(this), "VersionInfo.json")
             Tools.GLOBAL_GSON.fromJson(Tools.read(infoFile), VersionInfo::class.java)
-        }.getOrElse { null }
+        }.getOrNull()
     }
 
-    private fun Boolean.getInt(): Int = if (this) 1 else 0
+    private fun Boolean.toIntValue(): Int = if (this) 1 else 0
 
     override fun describeContents(): Int = 0
 
     override fun writeToParcel(dest: Parcel, flags: Int) {
         dest.writeStringList(listOf(versionsFolder, versionPath))
         dest.writeParcelable(versionConfig, flags)
-        dest.writeInt(isValid.getInt())
-        dest.writeInt(offlineAccountLogin.getInt())
+        dest.writeInt(isValid.toIntValue())
+        dest.writeInt(offlineAccountLogin.toIntValue())
         dest.writeParcelable(modCheckResult, flags)
     }
 
     companion object CREATOR : Parcelable.Creator<Version> {
-        private fun Int.toBoolean(): Boolean = this != 0
+        private fun Int.toBooleanValue(): Boolean = this != 0
 
         override fun createFromParcel(parcel: Parcel): Version {
             val stringList = ArrayList<String>()
             parcel.readStringList(stringList)
-            val versionConfig = parcel.readParcelable<VersionConfig>(VersionConfig::class.java.classLoader)!!
-            val isValid = parcel.readInt().toBoolean()
-            val offlineAccount = parcel.readInt().toBoolean()
-            val modCheckResult = parcel.readParcelable<ModChecker.ModCheckResult>(ModChecker.ModCheckResult::class.java.classLoader)
 
-            return Version(stringList[0], stringList[1], versionConfig, isValid).apply {
+            val versionConfig =
+                parcel.readParcelable<VersionConfig>(VersionConfig::class.java.classLoader)!!
+            val isValid = parcel.readInt().toBooleanValue()
+            val offlineAccount = parcel.readInt().toBooleanValue()
+            val modCheckResult =
+                parcel.readParcelable<ModChecker.ModCheckResult>(
+                    ModChecker.ModCheckResult::class.java.classLoader
+                )
+
+            return Version(
+                stringList[0],
+                stringList[1],
+                versionConfig,
+                isValid
+            ).apply {
                 offlineAccountLogin = offlineAccount
                 this.modCheckResult = modCheckResult
             }

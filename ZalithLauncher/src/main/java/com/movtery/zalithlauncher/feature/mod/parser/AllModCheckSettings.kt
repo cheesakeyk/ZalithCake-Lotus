@@ -11,5 +11,6 @@ enum class AllModCheckSettings(val unit: StringSettingUnit) {
     YES_STEVE_MODEL(StringSettingUnit("modCheckYesSteveModel", "0")),
     IM_BLOCKER(StringSettingUnit("modCheckIMBlocker", "0")),
     REPLAY_MOD(StringSettingUnit("modCheckReplayMod", "0")),
-    BORDERLESS_WINDOW(StringSettingUnit("modCheckBorderlessWindow", "0"))
+    BORDERLESS_WINDOW(StringSettingUnit("modCheckBorderlessWindow", "0")),
+    IS_LEGACY(StringSettingUnit("modCheckLegacy4J", "0"))
 }

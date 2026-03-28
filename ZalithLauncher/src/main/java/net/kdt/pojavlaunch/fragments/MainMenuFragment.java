@@ -65,6 +65,7 @@ public class MainMenuFragment extends FragmentWithAnim {
         binding.aboutText.setText(InfoCenter.replaceName(requireActivity(), R.string.about_tab));
         binding.aboutButton.setOnClickListener(v -> ZHTools.swapFragmentWithAnim(this, AboutFragment.class, AboutFragment.TAG, null));
         binding.customControlButton.setOnClickListener(v -> ZHTools.swapFragmentWithAnim(this, ControlButtonFragment.class, ControlButtonFragment.TAG, null));
+
         binding.openMainDirButton.setOnClickListener(v -> {
             Bundle bundle = new Bundle();
             bundle.putString(FilesFragment.BUNDLE_LIST_PATH, PathManager.DIR_GAME_HOME);

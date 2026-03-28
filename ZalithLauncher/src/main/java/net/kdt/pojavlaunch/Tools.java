@@ -16,8 +16,11 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -32,6 +35,7 @@ import com.google.gson.GsonBuilder;
 import com.movtery.zalithlauncher.InfoDistributor;
 import com.movtery.zalithlauncher.R;
 import com.movtery.zalithlauncher.context.ContextExecutor;
+import com.movtery.zalithlauncher.setting.AllSettings;
 import com.movtery.zalithlauncher.utils.LauncherProfiles;
 import com.movtery.zalithlauncher.feature.customprofilepath.ProfilePathHome;
 import com.movtery.zalithlauncher.feature.log.Logging;
@@ -49,12 +53,14 @@ import net.kdt.pojavlaunch.lifecycle.ContextExecutorTask;
 import net.kdt.pojavlaunch.memory.MemoryHoleFinder;
 import net.kdt.pojavlaunch.memory.SelfMapsParser;
 import net.kdt.pojavlaunch.multirt.MultiRTUtils;
+import net.kdt.pojavlaunch.prefs.LauncherPreferences;
 import net.kdt.pojavlaunch.utils.FileUtils;
 import net.kdt.pojavlaunch.value.DependentLibrary;
 import net.kdt.pojavlaunch.value.MinecraftLibraryArtifact;
 
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.io.IOUtils;
+import org.libsdl.app.SDLControllerManager;
 import org.lwjgl.glfw.CallbackBridge;
 
 import java.io.File;
@@ -67,10 +73,12 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 @SuppressWarnings("IOStreamConstructor")
 public final class Tools {
@@ -82,11 +90,56 @@ public final class Tools {
     public static int DEVICE_ARCHITECTURE;
     // New since 3.0.0
     public static String DIRNAME_HOME_JRE = "lib";
+    public static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static final String DEFAULT_LWJGL_COMPONENT = "lwjgl3";
+    private static final String LWJGL_COMPONENT_OVERRIDE_PROPERTY = "pojav.lwjgl.component";
+    private static final String LWJGL_COMPONENT_FALLBACK = "lwjgl3.4.2";
 
+    /**
+     * Exact version ids that should prefer lwjgl3.4.2 automatically.
+     * Add more confirmed versions or snapshot ids here later.
+     */
+    private static final List<String> MODERN_LWJGL_VERSION_ALLOWLIST = Arrays.asList(
+            "26.1"
+    );
+
+    private static boolean isModernVersionByRule(String versionToken) {
+        if (!isValidString(versionToken)) return false;
+
+        String v = versionToken.trim().toLowerCase(Locale.ROOT);
+
+        // Match year-based versions like 26.1, 26.2, 26.10, 27.1, etc.
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("^(\\d{2})\\.(\\d+)(?:\\.\\d+)?$")
+                .matcher(v);
+
+        if (!matcher.matches()) return false;
+
+        int yearPrefix = Integer.parseInt(matcher.group(1));
+        return yearPrefix >= 26;
+    }
+    private static boolean isAllowlistedModernVersion(String versionToken) {
+        if (!isValidString(versionToken)) return false;
+
+        String normalized = versionToken.trim().toLowerCase(Locale.ROOT);
+
+        for (String allowed : MODERN_LWJGL_VERSION_ALLOWLIST) {
+            String base = allowed.toLowerCase(Locale.ROOT);
+
+            if (normalized.equals(base)
+                    || normalized.startsWith(base + "-snapshot-")
+                    || normalized.startsWith(base + "-rc-")) {
+                return true;
+            }
+        }
+
+        return false;
+    }
     /**
      * Checks if the Pojav's storage root is accessible and read-writable
      * @return true if storage is fine, false if storage is not accessible
      */
+
     public static boolean checkStorageRoot() {
         File externalFilesDir = new File(PathManager.DIR_GAME_HOME);
         //externalFilesDir == null when the storage is not mounted if it was obtained with the context call
@@ -134,8 +187,8 @@ public final class Tools {
 
     public static String artifactToPath(DependentLibrary library) {
         if (library.downloads != null &&
-            library.downloads.artifact != null &&
-            library.downloads.artifact.path != null)
+                library.downloads.artifact != null &&
+                library.downloads.artifact.path != null)
             return library.downloads.artifact.path;
         String[] libInfos = library.name.split(":");
 
@@ -157,20 +210,131 @@ public final class Tools {
         return new File(version.getVersionPath(), version.getVersionName() + ".jar").getAbsolutePath();
     }
 
-    public static String getLWJGL3ClassPath() {
+    private static File getLWJGLComponentDir(String componentName) {
+        File privateDir = new File(PathManager.DIR_FILE, componentName);
+        if (privateDir.isDirectory()) return privateDir;
+
+        File externalDir = new File(PathManager.DIR_GAME_HOME, componentName);
+        if (externalDir.isDirectory()) return externalDir;
+
+        return privateDir;
+    }
+
+    public static boolean hasLWJGLComponent(String componentName) {
+        return getLWJGLComponentDir(componentName).isDirectory();
+    }
+
+    public static String getRequestedLWJGLComponent() {
+        String forcedComponent = System.getProperty(LWJGL_COMPONENT_OVERRIDE_PROPERTY);
+        return isValidString(forcedComponent) ? forcedComponent : null;
+    }
+
+    public static String resolveLWJGLComponent() {
+        String forcedComponent = getRequestedLWJGLComponent();
+        if (forcedComponent != null) {
+            if (hasLWJGLComponent(forcedComponent)) return forcedComponent;
+            Logging.w(InfoDistributor.LAUNCHER_NAME,
+                    "Requested LWJGL component does not exist: " + getLWJGLComponentDir(forcedComponent).getAbsolutePath());
+        }
+
+        if (hasLWJGLComponent(DEFAULT_LWJGL_COMPONENT)) return DEFAULT_LWJGL_COMPONENT;
+        if (hasLWJGLComponent(LWJGL_COMPONENT_FALLBACK)) return LWJGL_COMPONENT_FALLBACK;
+
+        return DEFAULT_LWJGL_COMPONENT;
+    }
+
+    public static String resolveLWJGLComponent(Version minecraftVersion) {
+        return resolveLWJGLComponentForLaunch(minecraftVersion, null);
+    }
+
+    public static String resolveLWJGLComponentForLaunch(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        String forcedComponent = getRequestedLWJGLComponent();
+        if (forcedComponent != null) {
+            if (hasLWJGLComponent(forcedComponent)) return forcedComponent;
+            Logging.w(InfoDistributor.LAUNCHER_NAME,
+                    "Requested LWJGL component does not exist: " + getLWJGLComponentDir(forcedComponent).getAbsolutePath());
+        }
+
+        if (shouldUseModernLWJGL(minecraftVersion, versionInfo) && hasLWJGLComponent(LWJGL_COMPONENT_FALLBACK)) {
+            return LWJGL_COMPONENT_FALLBACK;
+        }
+
+        if (hasLWJGLComponent(DEFAULT_LWJGL_COMPONENT)) return DEFAULT_LWJGL_COMPONENT;
+        if (hasLWJGLComponent(LWJGL_COMPONENT_FALLBACK)) return LWJGL_COMPONENT_FALLBACK;
+
+        return DEFAULT_LWJGL_COMPONENT;
+    }
+    /*public static boolean shouldUseModernLWJGL(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        String versionToken = getVersionToken(minecraftVersion, versionInfo);
+        return isAllowlistedModernVersion(versionToken);
+    }
+
+    private static String getVersionToken(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        if (minecraftVersion != null && isValidString(minecraftVersion.getVersionName())) {
+            return minecraftVersion.getVersionName();
+        }
+        if (versionInfo != null && isValidString(versionInfo.id)) {
+            return versionInfo.id;
+        }
+        if (versionInfo != null && isValidString(versionInfo.inheritsFrom)) {
+            return versionInfo.inheritsFrom;
+        }
+        return null;
+    }*/
+    public static boolean shouldUseModernLWJGL(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        String versionToken = getVersionToken(minecraftVersion, versionInfo);
+        return isAllowlistedModernVersion(versionToken) || isModernVersionByRule(versionToken);
+    }
+
+    private static String getVersionToken(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        if (versionInfo != null && isValidString(versionInfo.inheritsFrom)) {
+            return versionInfo.inheritsFrom;
+        }
+        if (versionInfo != null && isValidString(versionInfo.id)) {
+            return versionInfo.id;
+        }
+        if (minecraftVersion != null && isValidString(minecraftVersion.getVersionName())) {
+            return minecraftVersion.getVersionName();
+        }
+        return null;
+    }
+
+    public static String getLWJGLClassPath(String componentName) {
         StringBuilder libStr = new StringBuilder();
-        File lwjgl3Folder = new File(PathManager.DIR_GAME_HOME, "lwjgl3");
-        File[] lwjgl3Files = lwjgl3Folder.listFiles();
-        if (lwjgl3Files != null) {
-            for (File file: lwjgl3Files) {
+        File lwjglFolder = getLWJGLComponentDir(componentName);
+        File[] lwjglFiles = lwjglFolder.listFiles();
+
+        if (lwjglFiles != null) {
+            Arrays.sort(lwjglFiles, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+            for (File file : lwjglFiles) {
                 if (file.getName().endsWith(".jar")) {
-                    libStr.append(file.getAbsolutePath()).append(":");
+                    if (libStr.length() > 0) libStr.append(":");
+                    libStr.append(file.getAbsolutePath());
                 }
             }
         }
-        // Remove the ':' at the end
-        libStr.setLength(libStr.length() - 1);
+
         return libStr.toString();
+    }
+
+    public static String getLWJGLClassPathForLaunch() {
+        return getLWJGLClassPath(resolveLWJGLComponent());
+    }
+
+    public static String getLWJGLClassPathForLaunch(Version minecraftVersion) {
+        return getLWJGLClassPath(resolveLWJGLComponentForLaunch(minecraftVersion, null));
+    }
+
+    public static String getLWJGLClassPathForLaunch(Version minecraftVersion, JMinecraftVersionList.Version versionInfo) {
+        return getLWJGLClassPath(resolveLWJGLComponentForLaunch(minecraftVersion, versionInfo));
+    }
+
+    public static String getLWJGL3ClassPath() {
+        return getLWJGLClassPath("lwjgl3");
+    }
+
+    public static String getLWJGL342ClassPath() {
+        return getLWJGLClassPath("lwjgl3.4.2");
     }
 
     public static String generateLaunchClassPath(JMinecraftVersionList.Version info, Version minecraftVersion) {
@@ -357,14 +521,6 @@ public final class Tools {
         }
     }
 
-    /**
-     * Show the error remotely in a context-aware fashion. Has generally the same behaviour as
-     * Tools.showError when in an activity, but when not in one, sends a notification that opens an
-     * activity and calls Tools.showError().
-     * NOTE: If the Throwable is a ContextExecutorTask and when not in an activity,
-     * its executeWithApplication() method will never be called.
-     * @param e the error (throwable)
-     */
     public static void showErrorRemote(Throwable e) {
         showErrorRemote(null, e);
     }
@@ -372,30 +528,23 @@ public final class Tools {
         showErrorRemote(context.getString(rolledMessage), e);
     }
     public static void showErrorRemote(String rolledMessage, Throwable e) {
-        // I WILL embrace layer violations because Android's concept of layers is STUPID
-        // We live in the same process anyway, why make it any more harder with this needless
-        // abstraction?
-
-        // Add your Context-related rage here
         ContextExecutor.executeTask(new ShowErrorActivity.RemoteErrorTask(e, rolledMessage));
     }
 
     private static boolean checkRules(JMinecraftVersionList.Arguments.ArgValue.ArgRules[] rules) {
-        if(rules == null) return true; // always allow
+        if(rules == null) return true;
         for (JMinecraftVersionList.Arguments.ArgValue.ArgRules rule : rules) {
             if (rule.action.equals("allow") && rule.os != null && rule.os.name.equals("osx")) {
-                return false; //disallow
+                return false;
             }
         }
-        return true; // allow if none match
+        return true;
     }
 
     public static void preProcessLibraries(DependentLibrary[] libraries) {
         for (DependentLibrary libItem : libraries) {
             String[] version = libItem.name.split(":")[2].split("\\.");
             if (libItem.name.startsWith("net.java.dev.jna:jna:")) {
-                // Special handling for LabyMod 1.8.9, Forge 1.12.2(?) and oshi
-                // we have libjnidispatch 5.13.0 in jniLibs directory
                 if (Integer.parseInt(version[0]) >= 5 && Integer.parseInt(version[1]) >= 13)
                     continue;
                 Logging.d(InfoDistributor.LAUNCHER_NAME, "Library " + libItem.name + " has been changed to version 5.13.0");
@@ -405,9 +554,6 @@ public final class Tools {
                 libItem.downloads.artifact.sha1 = "1200e7ebeedbe0d10062093f32925a912020e747";
                 libItem.downloads.artifact.url = "https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar";
             } else if (libItem.name.startsWith("com.github.oshi:oshi-core:")) {
-                //if (Integer.parseInt(version[0]) >= 6 && Integer.parseInt(version[1]) >= 3) return;
-                // FIXME: ensure compatibility
-
                 if (Integer.parseInt(version[0]) != 6 || Integer.parseInt(version[1]) != 2)
                     continue;
                 Logging.d(InfoDistributor.LAUNCHER_NAME, "Library " + libItem.name + " has been changed to version 6.3.0");
@@ -417,9 +563,6 @@ public final class Tools {
                 libItem.downloads.artifact.sha1 = "9e98cf55be371cafdb9c70c35d04ec2a8c2b42ac";
                 libItem.downloads.artifact.url = "https://repo1.maven.org/maven2/com/github/oshi/oshi-core/6.3.0/oshi-core-6.3.0.jar";
             } else if (libItem.name.startsWith("org.ow2.asm:asm-all:")) {
-                // Early versions of the ASM library get repalced with 5.0.4 because Pojav's LWJGL is compiled for
-                // Java 8, which is not supported by old ASM versions. Mod loaders like Forge, which depend on this
-                // library, often include lwjgl in their class transformations, which causes errors with old ASM versions.
                 if (Integer.parseInt(version[0]) >= 5) continue;
                 Logging.d(InfoDistributor.LAUNCHER_NAME, "Library " + libItem.name + " has been changed to version 5.0.4");
                 createLibraryInfo(libItem);
@@ -446,8 +589,8 @@ public final class Tools {
             if (libName == null) continue;
 
             if (libName.contains("org.lwjgl") ||
-                libName.contains("jinput-platform") ||
-                libName.contains("twitch-platform")
+                    libName.contains("jinput-platform") ||
+                    libName.contains("twitch-platform")
             ) {
                 Logging.d(InfoDistributor.LAUNCHER_NAME, "Ignored unusable dependency: " + libName);
                 continue;
@@ -472,24 +615,20 @@ public final class Tools {
                 preProcessLibraries(customVer.libraries);
             } else {
                 JMinecraftVersionList.Version inheritsVer;
-                //If it won't download, just search for it
                 try {
                     inheritsVer = Tools.GLOBAL_GSON.fromJson(read(version.getVersionsFolder() + "/" + customVer.inheritsFrom + "/" + customVer.inheritsFrom + ".json"), JMinecraftVersionList.Version.class);
                 } catch (IOException e) {
                     throw new RuntimeException("Can't find the source version for " + version.getVersionName() + " (req version=" + customVer.inheritsFrom + ")");
                 }
-                //inheritsVer.inheritsFrom = inheritsVer.id;
                 insertSafety(inheritsVer, customVer,
                         "assetIndex", "assets", "id",
                         "mainClass", "minecraftArguments",
                         "releaseTime", "time", "type"
                 );
 
-                // Go through the libraries, remove the ones overridden by the custom version
                 List<DependentLibrary> inheritLibraryList = new ArrayList<>(Arrays.asList(inheritsVer.libraries));
                 outer_loop:
                 for(DependentLibrary library : customVer.libraries){
-                    // Clean libraries overridden by the custom version
                     String libName = library.name.substring(0, library.name.lastIndexOf(":"));
 
                     for(DependentLibrary inheritLibrary : inheritLibraryList) {
@@ -500,20 +639,16 @@ public final class Tools {
                                     libName.substring(libName.lastIndexOf(":") + 1) + " with " +
                                     inheritLibName.substring(inheritLibName.lastIndexOf(":") + 1));
 
-                            // Remove the library , superseded by the overriding libs
                             inheritLibraryList.remove(inheritLibrary);
                             continue outer_loop;
                         }
                     }
                 }
 
-                // Fuse libraries
                 inheritLibraryList.addAll(Arrays.asList(customVer.libraries));
                 inheritsVer.libraries = inheritLibraryList.toArray(new DependentLibrary[0]);
                 preProcessLibraries(inheritsVer.libraries);
 
-
-                // Inheriting Minecraft 1.13+ with append custom args
                 if (inheritsVer.arguments != null && customVer.arguments != null) {
                     List totalArgList = new ArrayList(Arrays.asList(inheritsVer.arguments.game));
 
@@ -527,12 +662,10 @@ public final class Tools {
                         Object perCustomArg = customVer.arguments.game[i];
                         if (perCustomArg instanceof String) {
                             String perCustomArgStr = (String) perCustomArg;
-                            // Check if there is a duplicate argument on combine
                             if (perCustomArgStr.startsWith("--") && totalArgList.contains(perCustomArgStr)) {
                                 perCustomArg = customVer.arguments.game[i + 1];
                                 if (perCustomArg instanceof String) {
                                     perCustomArgStr = (String) perCustomArg;
-                                    // If the next is argument value, skip it
                                     if (!perCustomArgStr.startsWith("--")) {
                                         nskip++;
                                     }
@@ -551,7 +684,6 @@ public final class Tools {
                 customVer = inheritsVer;
             }
 
-            // LabyMod 4 sets version instead of majorVersion
             if (customVer.javaVersion != null && customVer.javaVersion.majorVersion == 0) {
                 customVer.javaVersion.majorVersion = customVer.javaVersion.version;
             }
@@ -561,7 +693,6 @@ public final class Tools {
         }
     }
 
-    // Prevent NullPointerException
     private static void insertSafety(JMinecraftVersionList.Version targetVer, JMinecraftVersionList.Version fromVer, String... keyArr) {
         for (String key : keyArr) {
             Object value = null;
@@ -614,7 +745,7 @@ public final class Tools {
             if(sourceSHA != null) {
                 return sha1_dst.equalsIgnoreCase(sourceSHA);
             } else{
-                return true; // fake match
+                return true;
             }
         }catch (IOException e) {
             Logging.i("SHA1","Fake-matching a hash due to a read error",e);
@@ -673,7 +804,7 @@ public final class Tools {
 
     public static String getFileName(Context ctx, Uri uri) {
         Cursor c = ctx.getContentResolver().query(uri, null, null, null, null);
-        if(c == null) return uri.getLastPathSegment(); // idk myself but it happens on asus file manager
+        if(c == null) return uri.getLastPathSegment();
         c.moveToFirst();
         int columnIndex = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
         if(columnIndex == -1) return uri.getLastPathSegment();
@@ -686,7 +817,6 @@ public final class Tools {
         fragmentActivity.getSupportFragmentManager().popBackStack(MainMenuFragment.TAG, 0);
     }
 
-    /** Remove the current fragment */
     public static void removeCurrentFragment(FragmentActivity fragmentActivity){
         fragmentActivity.getSupportFragmentManager().popBackStack();
     }
@@ -697,7 +827,7 @@ public final class Tools {
             return;
         }
 
-        if(!customJavaArgs){ // Launch the intent to get the jar file
+        if(!customJavaArgs){
             if(!(activity instanceof LauncherActivity))
                 throw new IllegalStateException("Cannot start Mod Installer without LauncherActivity");
             LauncherActivity launcherActivity = (LauncherActivity)activity;
@@ -705,7 +835,6 @@ public final class Tools {
             return;
         }
 
-        // install mods with custom arguments
         new EditTextDialog.Builder(activity)
                 .setTitle(R.string.dialog_select_jar)
                 .setHintText("-jar/-cp /path/to/file.jar ...")
@@ -722,9 +851,6 @@ public final class Tools {
                 }).showDialog();
     }
 
-    /** Launch the mod installer activity. The Uri must be from our own content provider or
-     * from ACTION_OPEN_DOCUMENT
-     */
     public static void launchModInstaller(Activity activity, @NonNull Uri uri){
         Intent intent = new Intent(activity, JavaGUILauncherActivity.class);
         intent.putExtra("modUri", uri);
@@ -738,15 +864,15 @@ public final class Tools {
 
     public static void installRuntimeFromUri(Context context, Uri uri) {
         Task.runTask(() -> {
-            String name = getFileName(context, uri);
-            MultiRTUtils.installRuntimeNamed(
-                    PathManager.DIR_NATIVE_LIB,
-                    context.getContentResolver().openInputStream(uri),
-                    name);
+                    String name = getFileName(context, uri);
+                    MultiRTUtils.installRuntimeNamed(
+                            PathManager.DIR_NATIVE_LIB,
+                            context.getContentResolver().openInputStream(uri),
+                            name);
 
-            MultiRTUtils.postPrepare(name);
-            return null;
-        }).onThrowable(e -> Tools.showError(context, e))
+                    MultiRTUtils.postPrepare(name);
+                    return null;
+                }).onThrowable(e -> Tools.showError(context, e))
                 .execute();
     }
 
@@ -771,5 +897,154 @@ public final class Tools {
     public static <T> T getWeakReference(WeakReference<T> weakReference) {
         if(weakReference == null) return null;
         return weakReference.get();
+    }
+    public static void runOnUiThread(Runnable runnable) {
+        MAIN_HANDLER.post(runnable);
+    }
+
+
+    public static Object runMethodbyReflection(String className, String methodName) throws ReflectiveOperationException{
+        Class<?> clazz = Class.forName(className);
+        Method method = clazz.getDeclaredMethod(methodName);
+        method.setAccessible(true);
+        Object motionListener = method.invoke(null);
+        assert motionListener != null;
+        return motionListener;
+    }
+    public static void dialog(final Context context, final CharSequence title, final CharSequence message) {
+        new AlertDialog.Builder(context)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    static class SDL {
+        public static native void initializeControllerSubsystems();
+    }
+    private static Logger.eventLogListener oldL4JMitigationLogListener;
+
+    public static void startOldLegacy4JMitigation(Activity activity, File gamedir) {
+        boolean hasLegacy4J = false;
+        File modsDir = new File(gamedir, "mods");
+        File[] mods = modsDir.listFiles(file -> file.isFile() && file.getName().endsWith(".jar"));
+        if(mods != null) {
+            for (File file : mods) {
+                String name = file.getName();
+                if (name.contains("Legacy4J")) {
+                    hasLegacy4J = true;
+                    break;
+                }
+            }
+        }
+        if (hasLegacy4J) {
+            String TAG = "OldLegacy4JMitigation";
+            Log.i(TAG, "Legacy4J detected!");
+            oldL4JMitigationLogListener = loggedLine -> {
+                if (AllSettings.getGamepadSdlPassthru().getValue()
+                        && loggedLine.contains("literal{SDL3 (isXander's libsdl4j)} isn't supported in this system. GLFW will be used instead.")) {
+                    Log.i(TAG, "Old version of Legacy4J detected! Force enabling SDL");
+                    Tools.SDL.initializeControllerSubsystems();
+                    Tools.runOnUiThread(() -> {
+                        Tools.dialog(activity, "Warning!", "You are using Legacy4J enable SDL to use the built in controller feature!");
+                    });
+                    Logger.removeLogListener(oldL4JMitigationLogListener);
+                } else if (AllSettings.getGamepadSdlPassthru().getValue()
+                        && loggedLine.contains("Added SDL Controller Mappings")) {
+                    Log.i(TAG, "Fixed version of Legacy4J detected! Have fun!");
+                    Logger.removeLogListener(oldL4JMitigationLogListener);
+                }
+            };
+            Logger.addLogListener(oldL4JMitigationLogListener);
+        }
+    }
+    private static Logger.eventLogListener controllableMitigationLogListener;
+    public static void startControllableMitigation(Activity activity, File gamedir) {
+        String TAG = "ControllableMitigation";
+        File controllableDir = new File(gamedir, "controllable_natives/SDL");
+        boolean hasControllable = false;
+
+        File modsDir = new File(gamedir, "mods");
+        File[] mods = modsDir.listFiles(file -> file.isFile() && file.getName().endsWith(".jar"));
+        if (mods != null) {
+            for (File file : mods) {
+                String name = file.getName().toLowerCase();
+                if (name.contains("controllable")) {
+                    hasControllable = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasControllable) return;
+
+        Log.i(TAG, "Controllable detected, starting mitigation early");
+        Logger.appendToLog("Controllable detected, starting mitigation early");
+
+        try {
+            if (controllableDir.exists()) {
+                org.apache.commons.io.FileUtils.deleteDirectory(controllableDir);
+                Log.i(TAG, "Deleted existing controllable SDL dir: " + controllableDir.getAbsolutePath());
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed initial controllable SDL cleanup", t);
+        }
+
+        Tools.runOnUiThread(() -> {
+            Tools.dialog(activity, "Warning!",
+                    "Controllable may crash on some setups. If it does, try again or use Controlify.");
+        });
+
+        Thread mitigationThread = new Thread(() -> {
+            Log.i(TAG, "Mitigation watcher thread started");
+
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    if (controllableDir.isDirectory()) {
+                        File[] versionDirs = controllableDir.listFiles();
+                        if (versionDirs != null) {
+                            for (File versionDir : versionDirs) {
+                                File[] libs = versionDir.listFiles();
+                                if (libs != null) {
+                                    for (File lib : libs) {
+                                        if (lib.isFile() && lib.getName().contains("SDL")) {
+                                            Log.i(TAG, "Deleting extracted Controllable SDL: " + lib.getAbsolutePath());
+                                            boolean ok = lib.delete();
+                                            Log.i(TAG, "Delete result=" + ok);
+                                            if (ok) {
+                                                Log.i(TAG, "Mitigation succeeded, ending thread");
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    try {
+                        Thread.sleep(25);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "Mitigation loop error", t);
+                }
+            }
+
+            Log.i(TAG, "Mitigation watcher thread ended");
+        }, "ControllableMitigationThread");
+
+        mitigationThread.start();
+
+        controllableMitigationLogListener = loggedLine -> {
+            if (loggedLine.contains("Sound engine started") && mitigationThread.isAlive()) {
+                Log.i(TAG, "Stopping mitigation watcher after sound engine start");
+                Logger.removeLogListener(controllableMitigationLogListener);
+                mitigationThread.interrupt();
+            }
+        };
+        Logger.addLogListener(controllableMitigationLogListener);
     }
 }

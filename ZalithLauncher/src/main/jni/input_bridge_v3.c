@@ -9,7 +9,7 @@
  * 
  * - Implements glfwSetCursorPos() to handle grab camera pos correctly.
  */
- 
+
 #include <assert.h>
 #include <dlfcn.h>
 #include <jni.h>
@@ -69,7 +69,7 @@ jint JNI_OnLoad(JavaVM* vm, __attribute__((unused)) void* reserved) {
         registerFunctions(env);
     }
     pojav_environ->isGrabbing = JNI_FALSE;
-    
+
     return JNI_VERSION_1_4;
 }
 
@@ -119,6 +119,9 @@ void pojavPumpEvents(void* window) {
                 break;
             case EVENT_TYPE_MOUSE_BUTTON:
                 if(pojav_environ->GLFW_invoke_MouseButton) pojav_environ->GLFW_invoke_MouseButton(window, event.i1, event.i2, event.i3);
+                break;
+            case EVENT_TYPE_CURSOR_ENTER:
+                if(pojav_environ->GLFW_invoke_CursorEnter) pojav_environ->GLFW_invoke_CursorEnter(window, event.i1);
                 break;
             case EVENT_TYPE_SCROLL:
                 if(pojav_environ->GLFW_invoke_Scroll) pojav_environ->GLFW_invoke_Scroll(window, event.i1, event.i2);
@@ -174,12 +177,13 @@ void pojavStopPumping() {
 
 JNIEXPORT void JNICALL
 Java_org_lwjgl_glfw_GLFW_nglfwGetCursorPos(JNIEnv *env, __attribute__((unused)) jclass clazz, __attribute__((unused)) jlong window, jobject xpos,
-                                          jobject ypos) {
+                                           jobject ypos) {
     *(double*)(*env)->GetDirectBufferAddress(env, xpos) = pojav_environ->cursorX;
     *(double*)(*env)->GetDirectBufferAddress(env, ypos) = pojav_environ->cursorY;
 }
 
-JNIEXPORT void JNICALL JavaCritical_org_lwjgl_glfw_GLFW_nglfwGetCursorPosA(__attribute__((unused)) jlong window, jint lengthx, jdouble* xpos, jint lengthy, jdouble* ypos) {
+JNIEXPORT void JNICALL
+JavaCritical_org_lwjgl_glfw_GLFW_nglfwGetCursorPosA(__attribute__((unused)) jlong window, jint lengthx, jdouble* xpos, jint lengthy, jdouble* ypos) {
     *xpos = pojav_environ->cursorX;
     *ypos = pojav_environ->cursorY;
 }
@@ -259,6 +263,15 @@ void installEMUIIteratorMititgation() {
 void critical_set_stackqueue(jboolean use_input_stack_queue) {
     pojav_environ->isUseStackQueueCall = (int) use_input_stack_queue;
 }
+// Cursor shapes are desktop-only. Android has no native cursor to change.
+void critical_set_cursor_shape(jint shape) {
+    (void) shape; // no-op
+}
+void noncritical_set_cursor_shape(__attribute__((unused)) JNIEnv* env,
+                                  __attribute__((unused)) jclass clazz,
+                                  jint shape) {
+    (void) shape; // no-op
+}
 
 void noncritical_set_stackqueue(__attribute__((unused)) JNIEnv *env, __attribute__((unused)) jclass clazz, jboolean use_input_stack_queue) {
     critical_set_stackqueue(use_input_stack_queue);
@@ -273,7 +286,7 @@ JNIEXPORT jstring JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeClipboard(JNI
     (*pojav_environ->dalvikJavaVMPtr)->AttachCurrentThread(pojav_environ->dalvikJavaVMPtr, &dalvikEnv, NULL);
     assert(dalvikEnv != NULL);
     assert(pojav_environ->bridgeClazz != NULL);
-    
+
     LOGD("Clipboard: Converting string\n");
     char *copySrcC;
     jstring copyDst = NULL;
@@ -286,11 +299,17 @@ JNIEXPORT jstring JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeClipboard(JNI
     jstring pasteDst = convertStringJVM(dalvikEnv, env, (jstring) (*dalvikEnv)->CallStaticObjectMethod(dalvikEnv, pojav_environ->bridgeClazz, pojav_environ->method_accessAndroidClipboard, action, copyDst));
 
     if (copySrc) {
-        (*dalvikEnv)->DeleteLocalRef(dalvikEnv, copyDst);    
+        (*dalvikEnv)->DeleteLocalRef(dalvikEnv, copyDst);
         (*env)->ReleaseByteArrayElements(env, copySrc, (jbyte *)copySrcC, 0);
     }
     (*pojav_environ->dalvikJavaVMPtr)->DetachCurrentThread(pojav_environ->dalvikJavaVMPtr);
     return pasteDst;
+}
+JNIEXPORT void JNICALL
+Java_org_lwjgl_glfw_CallbackBridge_nativeSetCursorShape(JNIEnv* env, jclass clazz, jint shape) {
+    (void)env; (void)clazz;
+    // Desktop cursor shapes don’t exist on Android, so just ignore.
+    (void)shape;
 }
 
 JNIEXPORT jboolean JNICALL JavaCritical_org_lwjgl_glfw_CallbackBridge_nativeSetInputReady(jboolean inputReady) {
@@ -345,6 +364,7 @@ jboolean critical_send_char_mods(jchar codepoint, jint mods) {
 jboolean noncritical_send_char_mods(__attribute__((unused)) JNIEnv* env, __attribute__((unused)) jclass clazz, jchar codepoint, jint mods) {
     return critical_send_char_mods(codepoint, mods);
 }
+// Need to add this back after for Snapshot builds
 /*
 JNIEXPORT void JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeSendCursorEnter(JNIEnv* env, jclass clazz, jint entered) {
     if (pojav_environ->GLFW_invoke_CursorEnter && pojav_environ->isInputReady) {
@@ -499,6 +519,8 @@ JNIEXPORT void JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeSetWindowAttrib(
 }
 const static JNINativeMethod critical_fcns[] = {
         {"nativeSetUseInputStackQueue", "(Z)V", critical_set_stackqueue},
+        {"nativeSetCursorShape", "(I)V", critical_set_cursor_shape},
+        {"nativeSetCursorShape", "(I)V", noncritical_set_cursor_shape},
         {"nativeSendChar", "(C)Z", critical_send_char},
         {"nativeSendCharMods", "(CI)Z", critical_send_char_mods},
         {"nativeSendKey", "(IIII)V", critical_send_key},
@@ -510,6 +532,7 @@ const static JNINativeMethod critical_fcns[] = {
 
 const static JNINativeMethod noncritical_fcns[] = {
         {"nativeSetUseInputStackQueue", "(Z)V", noncritical_set_stackqueue},
+        {"nativeSetCursorShape", "(I)V", noncritical_set_cursor_shape},
         {"nativeSendChar", "(C)Z", noncritical_send_char},
         {"nativeSendCharMods", "(CI)Z", noncritical_send_char_mods},
         {"nativeSendKey", "(IIII)V", noncritical_send_key},
@@ -561,4 +584,9 @@ static void registerFunctions(JNIEnv *env) {
                             bridge_class,
                             use_critical_cc ? critical_fcns : noncritical_fcns,
                             sizeof(critical_fcns)/sizeof(critical_fcns[0]));
+}
+
+JNIEXPORT void JNICALL
+Java_net_kdt_pojavlaunch_Tools_00024SDL_initializeControllerSubsystems(JNIEnv *env, jclass clazz) {
+    // TODO: implement initializeControllerSubsystems()
 }

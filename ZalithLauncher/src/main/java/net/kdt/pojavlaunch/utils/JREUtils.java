@@ -60,6 +60,8 @@ import javax.microedition.khronos.egl.EGLContext;
 import javax.microedition.khronos.egl.EGLDisplay;
 
 public final class JREUtils {
+    private static final boolean FORCE_PURE_HYBRID_TEST_MODE = false;
+
     private JREUtils() {}
 
     public static String LD_LIBRARY_PATH;
@@ -101,6 +103,9 @@ public final class JREUtils {
     }
 
     public static void initJavaRuntime(String jreHome) {
+        //dlopen("libSDL3.so");
+        //dlopen("libSDL2.so");
+        dlopen("libzstd-jni_dh-1.5.7-6.so");
         dlopen(findInLdLibPath("libjli.so"));
         if (!dlopen("libjvm.so")) {
             Logging.w("DynamicLoader","Failed to load with no path, trying with full path");
@@ -369,6 +374,7 @@ public final class JREUtils {
     ) {
         List<String> userArgs = getJavaArgs(runtimeHome, userArgsString);
         //Remove arguments that can interfere with the good working of the launcher
+
         purgeArg(userArgs,"-Xms");
         purgeArg(userArgs,"-Xmx");
         purgeArg(userArgs,"-d32");
@@ -390,14 +396,34 @@ public final class JREUtils {
         userArgs.add("-Xmx" + AllSettings.getRamAllocation().getValue().getValue() + "M");
         if (Renderers.INSTANCE.isCurrentRendererValid()) userArgs.add("-Dorg.lwjgl.opengl.libname=" + loadGraphicsLibrary());
 
-        // Force LWJGL to use the Freetype library intended for it, instead of using the one
-        // that we ship with Java (since it may be older than what's needed)
-        userArgs.add("-Dorg.lwjgl.freetype.libname="+ DIR_NATIVE_LIB +"/libfreetype.so");
+        // In pure-hybrid test mode, do not pin LWJGL freetype to the APK jniLibs directory.
+        // Let the selected LWJGL component/native path decide it instead.
+        if (!FORCE_PURE_HYBRID_TEST_MODE) {
+            userArgs.add("-Dorg.lwjgl.freetype.libname="+ DIR_NATIVE_LIB +"/libfreetype.so");
+        }
 
         // Some phones are not using the right number of cores, fix that
         userArgs.add("-XX:ActiveProcessorCount=" + java.lang.Runtime.getRuntime().availableProcessors());
+        purgeArg(userArgs, "-Djava.library.path");
+        purgeArg(userArgs, "-Djna.boot.library.path");
+        purgeArg(userArgs, "-Djna.tmpdir");
+        purgeArg(userArgs, "-Dorg.lwjgl.librarypath");
+        purgeArg(userArgs, "-Dorg.lwjgl.system.SharedLibraryExtractPath");
+        purgeArg(userArgs, "-Dio.netty.native.workdir");
 
         userArgs.addAll(JVMArgs);
+
+        if (FORCE_PURE_HYBRID_TEST_MODE) {
+            // Keep the hybrid-provided java.library.path/org.lwjgl.librarypath values,
+            // but force all writable temp/extract locations back into app cache.
+            purgeArg(userArgs, "-Djna.tmpdir");
+            purgeArg(userArgs, "-Dorg.lwjgl.system.SharedLibraryExtractPath");
+            purgeArg(userArgs, "-Dio.netty.native.workdir");
+            userArgs.add("-Djna.tmpdir=" + PathManager.DIR_CACHE.getAbsolutePath());
+            userArgs.add("-Dorg.lwjgl.system.SharedLibraryExtractPath=" + PathManager.DIR_CACHE.getAbsolutePath());
+            userArgs.add("-Dio.netty.native.workdir=" + PathManager.DIR_CACHE.getAbsolutePath());
+        }
+
         activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.autoram_info_msg, AllSettings.getRamAllocation().getValue().getValue()), Toast.LENGTH_SHORT).show());
         System.out.println(JVMArgs);
         for (int i = 0; i < userArgs.size(); i++) {
@@ -456,7 +482,7 @@ public final class JREUtils {
         ArrayList<String> overridableArguments = new ArrayList<>(Arrays.asList(
                 "-Djava.home=" + runtimeHome,
                 "-Djava.io.tmpdir=" + PathManager.DIR_CACHE.getAbsolutePath(),
-                "-Djna.boot.library.path=" + DIR_NATIVE_LIB,
+                "-Djna.boot.library.path=" + (FORCE_PURE_HYBRID_TEST_MODE ? PathManager.DIR_CACHE.getAbsolutePath() : DIR_NATIVE_LIB),
                 "-Duser.home=" + ProfilePathManager.INSTANCE.getCurrentPath(),
                 "-Duser.language=" + System.getProperty("user.language"),
                 "-Dos.name=Linux",

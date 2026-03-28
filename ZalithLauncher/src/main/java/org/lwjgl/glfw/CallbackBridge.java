@@ -2,6 +2,7 @@ package org.lwjgl.glfw;
 
 import android.content.ClipData;
 import android.content.ClipDescription;
+import android.util.Log;
 import android.view.Choreographer;
 
 import androidx.annotation.Keep;
@@ -10,7 +11,13 @@ import androidx.annotation.Nullable;
 import net.kdt.pojavlaunch.GrabListener;
 import net.kdt.pojavlaunch.LwjglGlfwKeycode;
 import net.kdt.pojavlaunch.MainActivity;
+import net.kdt.pojavlaunch.Tools;
+import net.kdt.pojavlaunch.customcontrols.gamepad.direct.DirectGamepadEnableHandler;
 
+import java.lang.ref.WeakReference;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 
 import dalvik.annotation.optimization.CriticalNative;
@@ -19,22 +26,26 @@ public class CallbackBridge {
     public static final Choreographer sChoreographer = Choreographer.getInstance();
     private static boolean isGrabbing = false;
     private static final ArrayList<GrabListener> grabListeners = new ArrayList<>();
-    
+    // Use a weak reference here to avoid possibly statically referencing a Context.
+    private static @Nullable WeakReference<DirectGamepadEnableHandler> sDirectGamepadEnableHandler;
     public static final int CLIPBOARD_COPY = 2000;
     public static final int CLIPBOARD_PASTE = 2001;
     public static final int CLIPBOARD_OPEN = 2002;
-    
+
     public static volatile int windowWidth, windowHeight;
     public static volatile int physicalWidth, physicalHeight;
     public static float mouseX, mouseY;
     public volatile static boolean holdingAlt, holdingCapslock, holdingCtrl,
             holdingNumlock, holdingShift;
+    public static final ByteBuffer sGamepadButtonBuffer = null;
+    public static final FloatBuffer sGamepadAxisBuffer = null;
+    public static boolean sGamepadDirectInput = false;
 
     public static void putMouseEventWithCoords(int button, float x, float y) {
         putMouseEventWithCoords(button, true, x, y);
         sChoreographer.postFrameCallbackDelayed(l -> putMouseEventWithCoords(button, false, x, y), 33);
     }
-    
+
     public static void putMouseEventWithCoords(int button, boolean isDown, float x, float y /* , int dz, long nanos */) {
         sendCursorPos(x, y);
         sendMouseKeycode(button, CallbackBridge.getCurrentMods(), isDown);
@@ -47,24 +58,38 @@ public class CallbackBridge {
         nativeSendCursorPos(mouseX, mouseY);
     }
 
-    public static void sendKeycode(int keycode, char keychar, int scancode, int modifiers, boolean isDown) {
+    /*public static void sendKeycode(int keycode, char keychar, int scancode, int modifiers, boolean isDown) {
         // TODO CHECK: This may cause input issue, not receive input!
         if(keycode != 0)  nativeSendKey(keycode,scancode,isDown ? 1 : 0, modifiers);
         if(isDown && keychar != '\u0000') {
             nativeSendCharMods(keychar,modifiers);
             nativeSendChar(keychar);
         }
+    }*/
+    public static void sendKeycode(int keycode, char keychar, int scancode, int modifiers, boolean isDown) {
+        // TODO CHECK: This may cause input issue, not receive input!
+        if(keycode != 0)  nativeSendKey(keycode,scancode,isDown ? 1 : 0, modifiers);
+        // Only controlmaps goes through here, that means we need to block ISOControl or else
+        // Minecraft tries to type :TAB: as a character in chat, fails, and then ignores the key,
+        // breaking the tab autofill function in old versions. (like 1.12.2, 1.8.9).
+        if(isDown && !Character.isISOControl(keychar)) {
+            nativeSendCharMods(keychar,modifiers);
+            nativeSendChar(keychar);
+        }
     }
-
     public static void sendChar(char keychar, int modifiers){
+        // Only an EditText goes through here, that means emojis are allowed, so no isISOControl
+        // cause we might break emoji mods then.
+        // See net/kdt/pojavlaunch/customcontrols/keyboard/TouchCharInput.java#L147 (onTextChanged)
         nativeSendCharMods(keychar,modifiers);
         nativeSendChar(keychar);
     }
-
     public static void sendKeyPress(int keyCode, int modifiers, boolean status) {
         sendKeyPress(keyCode, 0, modifiers, status);
     }
-
+    public static void sendKeyPress(int keyCode, char keyChar, int modifiers, boolean status) {
+        sendKeyPress(keyCode, keyChar, 0, modifiers, status);
+    }
     public static void sendKeyPress(int keyCode, int scancode, int modifiers, boolean status) {
         sendKeyPress(keyCode, '\u0000', scancode, modifiers, status);
     }
@@ -91,7 +116,7 @@ public class CallbackBridge {
         sendMouseKeycode(keycode, CallbackBridge.getCurrentMods(), true);
         sendMouseKeycode(keycode, CallbackBridge.getCurrentMods(), false);
     }
-    
+
     public static void sendScroll(double xoffset, double yoffset) {
         nativeSendScroll(xoffset, yoffset);
     }
@@ -107,6 +132,7 @@ public class CallbackBridge {
 
     // Called from JRE side
     @SuppressWarnings("unused")
+
     public static @Nullable String accessAndroidClipboard(int type, String copy) {
         switch (type) {
             case CLIPBOARD_COPY:
@@ -166,7 +192,15 @@ public class CallbackBridge {
                 CallbackBridge.holdingNumlock = isDown;
         }
     }
-
+    //Called from JRE side
+    @SuppressWarnings("unused")
+    @Keep
+    private static void onDirectInputEnable() {
+        Log.i("CallbackBridge", "onDirectInputEnable()");
+        DirectGamepadEnableHandler enableHandler = Tools.getWeakReference(sDirectGamepadEnableHandler);
+        if(enableHandler != null) enableHandler.onDirectGamepadEnabled();
+        sGamepadDirectInput = true;
+    }
     //Called from JRE side
     @SuppressWarnings("unused")
     private static void onGrabStateChanged(final boolean grabbing) {
@@ -183,6 +217,16 @@ public class CallbackBridge {
         }, 16);
 
     }
+    public static FloatBuffer createGamepadAxisBuffer() {
+        ByteBuffer axisByteBuffer = nativeCreateGamepadAxisBuffer();
+        // NOTE: hardcoded order (also in jre_lwjgl3glfw CallbackBridge)
+        return axisByteBuffer.order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+    }
+
+    public static void setDirectGamepadEnableHandler(DirectGamepadEnableHandler h) {
+        sDirectGamepadEnableHandler = new WeakReference<>(h);
+    }
+
     public static void addGrabListener(GrabListener listener) {
         synchronized (grabListeners) {
             listener.onGrabState(isGrabbing);
@@ -207,10 +251,15 @@ public class CallbackBridge {
     @Keep @CriticalNative private static native void nativeSendScroll(double xoffset, double yoffset);
     @Keep @CriticalNative private static native void nativeSendScreenSize(int width, int height);
     @Keep public static native void nativeSetWindowAttrib(int attrib, int value);
+    private static native ByteBuffer nativeCreateGamepadButtonBuffer();
+    private static native ByteBuffer nativeCreateGamepadAxisBuffer();
     @Keep public static native int getCurrentFps();
+    @Keep @CriticalNative public static native void nativeSetCursorShape(int shape);
 
     static {
         System.loadLibrary("pojavexec");
+        //sGamepadButtonBuffer = nativeCreateGamepadButtonBuffer();
+        //sGamepadAxisBuffer = createGamepadAxisBuffer();
     }
 }
 

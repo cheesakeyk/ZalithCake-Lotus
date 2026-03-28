@@ -34,23 +34,23 @@
     </string-array>
 
     <string-array name="game_menu_location_names">
-        <item>@string/setting_game_menu_location_center</item>
-        <item>@string/setting_game_menu_location_left_or_top</item>
         <item>@string/setting_game_menu_location_left_or_bottom</item>
+        <item>@string/setting_game_menu_location_left_or_top</item>
         <item>@string/setting_game_menu_location_right_or_top</item>
         <item>@string/setting_game_menu_location_right_or_bottom</item>
         <item>@string/setting_game_menu_location_top_or_center</item>
         <item>@string/setting_game_menu_location_bottom_or_center</item>
+        <item>@string/setting_game_menu_location_center</item>
     </string-array>
 
     <string-array name="game_menu_location_values">
-        <item>center</item>
-        <item>left_or_top</item>
         <item>left_or_bottom</item>
+        <item>left_or_top</item>
         <item>right_or_top</item>
         <item>right_or_bottom</item>
         <item>top_or_center</item>
         <item>bottom_or_center</item>
+        <item>center</item>
     </string-array>
 
 </resources>

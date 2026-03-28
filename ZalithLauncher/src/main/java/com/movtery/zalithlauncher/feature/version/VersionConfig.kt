@@ -66,14 +66,18 @@ class VersionConfig(private var versionPath: File) : Parcelable {
     @Throws(Throwable::class)
     fun saveWithThrowable() {
         Logging.i("Save Version Config", "Trying to save: $this")
+
         val zalithVersionPath = getZalithVersionPath(versionPath)
+        if (!zalithVersionPath.exists() && !zalithVersionPath.mkdirs()) {
+            throw IllegalStateException("Failed to create version config directory: ${zalithVersionPath.absolutePath}")
+        }
+
         val configFile = File(zalithVersionPath, "VersionConfig.json")
-        if (!zalithVersionPath.exists()) zalithVersionPath.mkdirs()
 
         FileWriter(configFile, false).use {
-            val json = Tools.GLOBAL_GSON.toJson(this)
-            it.write(json)
+            it.write(Tools.GLOBAL_GSON.toJson(this))
         }
+
         Logging.i("Save Version Config", "Saved: $this")
     }
 
@@ -168,41 +172,65 @@ class VersionConfig(private var versionPath: File) : Parcelable {
 
         @JvmStatic
         fun parseConfig(versionPath: File): VersionConfig {
-            //兼容旧版本的版本隔离文件（识别并保存为新版本后，旧的版本隔离文件将被删除）
-            val oldConfigFile = File(getZalithVersionPath(versionPath), "ZalithVersion.cfg")
-            val configFile = File(getZalithVersionPath(versionPath), "VersionConfig.json")
+            val zalithVersionPath = getZalithVersionPath(versionPath)
+            val oldConfigFile = File(zalithVersionPath, "ZalithVersion.cfg")
+            val configFile = File(zalithVersionPath, "VersionConfig.json")
 
-            return runCatching getConfig@{
-                if (oldConfigFile.exists()) {
-                    runCatching {
-                        Tools.GLOBAL_GSON.fromJson(Tools.read(oldConfigFile), VersionConfig::class.java).apply {
-                            setIsolationType(IsolationType.ENABLE)
-                            setVersionPath(versionPath)
-                            save()
-                        }
-                    }.getOrNull().let { config ->
-                        //移除旧的配置文件
-                        oldConfigFile.delete()
-                        config?.let { return@getConfig it }
+            // Migrate old config format if present
+            if (oldConfigFile.exists()) {
+                runCatching {
+                    Tools.GLOBAL_GSON.fromJson(
+                        Tools.read(oldConfigFile),
+                        VersionConfig::class.java
+                    ).apply {
+                        setIsolationType(IsolationType.ENABLE)
+                        setVersionPath(versionPath)
+                        save()
                     }
+                }.onSuccess { migratedConfig ->
+                    oldConfigFile.delete()
+                    return migratedConfig
+                }.onFailure {
+                    Logging.e("Refresh Versions", "Failed to migrate old version config.", it)
+                    oldConfigFile.delete()
                 }
-                //读取此文件的内容，并解析为VersionConfig
+            }
+
+            // Missing config is normal for fresh/manual/non-Zalith versions
+            if (!configFile.exists()) {
+                val config = VersionConfig(versionPath)
+                config.save()
+                return config
+            }
+
+            return runCatching {
                 val configString = Tools.read(configFile)
                 val config = Tools.GLOBAL_GSON.fromJson(configString, VersionConfig::class.java)
+
                 runCatching {
                     JsonParser.parseString(configString).asJsonObject.apply {
                         if (has("isolation")) {
                             config.setIsolationType(
-                                if (get("isolation").asBoolean) IsolationType.ENABLE
-                                else IsolationType.DISABLE
+                                if (get("isolation").asBoolean) {
+                                    IsolationType.ENABLE
+                                } else {
+                                    IsolationType.DISABLE
+                                }
                             )
                         }
                     }
-                }.onFailure { Logging.e("Refresh Versions", "Failed to parse the version isolation field of the old version.", it) }
+                }.onFailure {
+                    Logging.e(
+                        "Refresh Versions",
+                        "Failed to parse the old isolation field in version config.",
+                        it
+                    )
+                }
+
                 config.setVersionPath(versionPath)
                 config
             }.getOrElse { e ->
-                Logging.e("Refresh Versions", Tools.printToString(e))
+                Logging.e("Refresh Versions", "Failed to read version config, recreating default.", e)
                 val config = VersionConfig(versionPath)
                 config.save()
                 config

@@ -32,9 +32,14 @@ import java.io.PrintStream;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class PojavApplication extends Application {
 	public static final String CRASH_REPORT_TAG = "ZalithCrashReport";
+	public static final ExecutorService sExecutorService = new ThreadPoolExecutor(4, 4, 500, TimeUnit.MILLISECONDS,  new LinkedBlockingQueue<>());
 
 	@Override
 	public void onCreate() {

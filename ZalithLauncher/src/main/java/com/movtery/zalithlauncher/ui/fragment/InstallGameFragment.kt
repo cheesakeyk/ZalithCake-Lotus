@@ -16,13 +16,12 @@ import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.databinding.FragmentInstallGameBinding
 import com.movtery.zalithlauncher.event.sticky.SelectInstallTaskEvent
 import com.movtery.zalithlauncher.event.value.InstallGameEvent
-import com.movtery.zalithlauncher.utils.LauncherProfiles
 import com.movtery.zalithlauncher.feature.customprofilepath.ProfilePathHome
+import com.movtery.zalithlauncher.feature.version.VersionsManager
 import com.movtery.zalithlauncher.feature.version.install.Addon
 import com.movtery.zalithlauncher.feature.version.install.InstallArgsUtils
 import com.movtery.zalithlauncher.feature.version.install.InstallTask
 import com.movtery.zalithlauncher.feature.version.install.InstallTaskItem
-import com.movtery.zalithlauncher.feature.version.VersionsManager
 import com.movtery.zalithlauncher.setting.AllSettings
 import com.movtery.zalithlauncher.ui.dialog.TipDialog
 import com.movtery.zalithlauncher.ui.fragment.download.addon.DownloadFabricApiFragment
@@ -32,6 +31,7 @@ import com.movtery.zalithlauncher.ui.fragment.download.addon.DownloadNeoForgeFra
 import com.movtery.zalithlauncher.ui.fragment.download.addon.DownloadOptiFineFragment
 import com.movtery.zalithlauncher.ui.fragment.download.addon.DownloadQuiltApiFragment
 import com.movtery.zalithlauncher.ui.fragment.download.addon.DownloadQuiltFragment
+import com.movtery.zalithlauncher.utils.LauncherProfiles
 import com.movtery.zalithlauncher.utils.ZHTools
 import com.movtery.zalithlauncher.utils.file.FileTools
 import com.movtery.zalithlauncher.utils.runtime.SelectRuntimeUtils
@@ -47,6 +47,7 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         const val TAG = "InstallGameFragment"
         const val BUNDLE_MC_VERSION = "bundle_mc_version"
     }
+
     private lateinit var binding: FragmentInstallGameBinding
     private lateinit var mcVersion: String
     private val addonMap: MutableMap<Addon, Pair<String, InstallTask>> = EnumMap(Addon::class.java)
@@ -67,7 +68,8 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        mcVersion = arguments?.getString(BUNDLE_MC_VERSION) ?: throw IllegalArgumentException("The Minecraft version is not passed")
+        mcVersion = arguments?.getString(BUNDLE_MC_VERSION)
+            ?: throw IllegalArgumentException("The Minecraft version is not passed")
 
         binding.apply {
             nameEdit.setText(mcVersion)
@@ -98,9 +100,6 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         checkIncompatible()
     }
 
-    /**
-     * 检查不兼容的Addon，并禁止用户选择该Addon版本
-     */
     @SuppressLint("SetTextI18n")
     private fun checkIncompatible() {
         binding.apply {
@@ -120,13 +119,6 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         }
     }
 
-    /**
-     * 检查传入的Addon是否在AddonMap中有不兼容的Addon
-     * @param addon 传入的Addon
-     * @param layout Addon的layout
-     * @param versionText Addon的版本信息
-     * @param installText Addon的安装类型
-     */
     private fun checkIncompatible(
         addon: Addon,
         layout: View,
@@ -144,7 +136,10 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
 
         if (incompatible.isNotEmpty()) {
             layout.isEnabled = false
-            installText.text = getString(R.string.version_install_incompatible, incompatible.joinToString(", ", transform = { it.addonName }))
+            installText.text = getString(
+                R.string.version_install_incompatible,
+                incompatible.joinToString(", ", transform = { it.addonName })
+            )
             versionText.visibility = View.GONE
             imageView.visibility = View.GONE
         } else {
@@ -173,18 +168,12 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         }
     }
 
-    /**
-     * 切换至Addon版本选择界面
-     */
     private fun swapFragment(fragmentClass: Class<out Fragment>, tag: String) {
         val bundle = Bundle()
         bundle.putString(BUNDLE_MC_VERSION, mcVersion)
         ZHTools.swapFragmentWithAnim(this, fragmentClass, tag, bundle)
     }
 
-    /**
-     * 移除Addon，并刷新当前不兼容的Addon
-     */
     private fun removeAddon(addon: Addon) {
         addonMap.remove(addon)
         checkIncompatible()
@@ -237,8 +226,6 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
                         Tools.backToMainMenu(activity)
                     }
 
-                    //检查OptiFine与Forge附加包是否同时存在
-                    //最后告诉用户兼容性问题
                     if (addonMap.containsKey(Addon.OPTIFINE) && addonMap.containsKey(Addon.FORGE)) {
                         TipDialog.Builder(activity)
                             .setTitle(R.string.generic_warning)
@@ -248,6 +235,7 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
                             .showDialog()
                     } else install()
                 }
+
                 back -> ZHTools.onBackPressed(activity)
                 else -> {}
             }
@@ -259,7 +247,7 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         val taskMap: MutableMap<Addon, InstallTaskItem> = EnumMap(Addon::class.java)
 
         fun getModPath(): File {
-            return if (AllSettings.versionIsolation.getValue()) //启用了版本隔离
+            return if (AllSettings.versionIsolation.getValue())
                 File(
                     ProfilePathHome.getGameHome(),
                     "versions${File.separator}$customVersionName${File.separator}mods"
@@ -270,9 +258,9 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         addonMap.forEach { (addon, taskPair) ->
             when (addon) {
                 Addon.OPTIFINE -> {
-                    val endTask: InstallTaskItem.EndTask = if (mapSize < 2) { //安装为一个版本
+                    val endTask: InstallTaskItem.EndTask = if (mapSize < 2) {
                         InstallTaskItem.EndTask { activity, file ->
-                            installInGUITask(activity, addon.addonName, taskPair.first) { intent, argUtils ->
+                            installInGUITask(activity, addon.addonName, taskPair.first, customVersionName) { intent, argUtils ->
                                 argUtils.setOptiFine(intent, file, customVersionName)
                             }
                         }
@@ -284,22 +272,22 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
                     taskMap[addon] = InstallTaskItem(taskPair.first, mapSize > 1, taskPair.second, endTask)
                 }
                 Addon.FORGE -> {
-                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) {  activity, file ->
-                        installInGUITask(activity, addon.addonName, taskPair.first) { intent, argUtils ->
+                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) { activity, file ->
+                        installInGUITask(activity, addon.addonName, taskPair.first, customVersionName) { intent, argUtils ->
                             argUtils.setForge(intent, file, customVersionName)
                         }
                     }
                 }
                 Addon.NEOFORGE -> {
-                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) {  activity, file ->
-                        installInGUITask(activity, addon.addonName, taskPair.first) { intent, argUtils ->
+                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) { activity, file ->
+                        installInGUITask(activity, addon.addonName, taskPair.first, customVersionName) { intent, argUtils ->
                             argUtils.setNeoForge(intent, file, customVersionName)
                         }
                     }
                 }
                 Addon.FABRIC -> {
-                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) {  activity, file ->
-                        installInGUITask(activity, addon.addonName, taskPair.first) { intent, argUtils ->
+                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) { activity, file ->
+                        installInGUITask(activity, addon.addonName, taskPair.first, customVersionName) { intent, argUtils ->
                             argUtils.setFabric(intent, file, customVersionName)
                         }
                     }
@@ -307,7 +295,13 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
                 Addon.FABRIC_API -> taskMap[addon] = InstallTaskItem(taskPair.first, true, taskPair.second) { _, file ->
                     moveFile(file, File(getModPath(), "${taskPair.first}.jar"))
                 }
-                Addon.QUILT -> taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second, null)
+                Addon.QUILT -> {
+                    taskMap[addon] = InstallTaskItem(taskPair.first, false, taskPair.second) { activity, file ->
+                        installInGUITask(activity, addon.addonName, taskPair.first, customVersionName) { intent, argUtils ->
+                            argUtils.setQuilt(intent, file)
+                        }
+                    }
+                }
                 Addon.QSL -> taskMap[addon] = InstallTaskItem(taskPair.first, true, taskPair.second) { _, file ->
                     moveFile(file, File(getModPath(), "${taskPair.first}.jar"))
                 }
@@ -322,16 +316,20 @@ class InstallGameFragment : FragmentWithAnim(R.layout.fragment_install_game), Vi
         FileUtils.moveFile(file, file1)
     }
 
-    /**
-     * 在JavaGUI内进行安装，作为EndTask，需要在UI线程内运行
-     * @param activity **此处必须使用activity的上下文！不能调用Fragment的上下文！！因为调用到这里的时候，Fragment早就被销毁了！！！**
-     */
     @Throws(Throwable::class)
-    private fun installInGUITask(activity: Activity, addonName: String, selectVersion: String, setArgs: (Intent, InstallArgsUtils) -> Unit) {
+    private fun installInGUITask(
+        activity: Activity,
+        addonName: String,
+        selectVersion: String,
+        customVersionName: String,
+        setArgs: (Intent, InstallArgsUtils) -> Unit
+    ) {
         val intent = Intent(activity, JavaGUILauncherActivity::class.java)
 
         val argUtils = InstallArgsUtils(mcVersion, selectVersion)
         setArgs(intent, argUtils)
+
+        VersionsManager.setPendingSelectedVersion(customVersionName)
 
         SelectRuntimeUtils.selectRuntime(activity, activity.getString(R.string.version_install_new_modloader, addonName)) { jreName ->
             LauncherProfiles.generateLauncherProfiles()

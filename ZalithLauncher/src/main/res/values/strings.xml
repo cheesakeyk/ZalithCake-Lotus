@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Zalith Launcher -->
+    <string name="setting_force_gui_input_title" translatable="false">Force GUI Touch Input</string>
     <string name="generic_open">Open</string>
     <string name="generic_close">Close</string>
     <string name="generic_return">Return</string>
@@ -127,10 +128,12 @@
     <string name="mod_forge_custom_version">Modifying version name</string>
     <string name="mod_failed_to_load_list">Failed to load version list!</string>
     <string name="mod_optifine_progress">Downloading %s</string>
-    <string name="mod_check_dialog_title">Mod Check Report</string>
+    <string name="mod_check_dialog_title">Mod Check Warning</string>
     <string name="mod_check_progress_message">Checking mods (%d / %d)</string>
     <string name="mod_check_touch_controller">Detected that Touch Controller mod (%s) is installed, the launcher is ready to enable control proxy to adapt to the mod.</string>
     <string name="mod_check_sodium_or_embeddium">Detected installed Sodium or Embeddium mod (%s). The launcher will disable this mod\'s warnings or prevent it from intentionally crashing on Android devices. However, please note that the mod\'s community has explicitly stated that they will no longer accept any issues related to Android devices. Therefore, if you encounter any problems while using this mod, do not report them to the mod\'s community!</string>
+    <string name="mod_check_isLegacy4J">Detected installed Legacy4J, enable SDL support to utilize the full mod functionality in Controller Settings!</string>
+
     <string name="mod_check_physics">The currently used physics mod (%s) is unpatched (replacing libPhysXJniBindings_64.so from x86_64 architecture to arm64), will crash on launch.</string>
     <string name="mod_check_mcef">MCEF (%s) cannot run on Android. It is usually used as a prerequisite dependency for WebDisplays/In-game Browser (browser).</string>
     <string name="mod_check_valkyrien_skies">Valkyrien Skies/Valkyrien Warfare (%s) cannot run directly in single-player mode. You must run it on a server (Termux can be used), otherwise the game will crash.</string>
@@ -268,6 +271,7 @@
     <string name="profiles_path_settings">Open Path Settings</string>
     <string name="profiles_path_settings_goto">Open this directory</string>
     <string name="profiles_path_create_new">Add New Path</string>
+    <string name="profiles_path_pick_sd_card">Pick SD Card Folder</string>
     <string name="profiles_path_create_new_title">Name this path</string>
     <string name="profiles_path_delete_title">Delete this path</string>
     <string name="profiles_path_delete_message">The launcher will delete this path, but will not delete the files saved within it. You can still re-add this path after deletion.</string>
@@ -387,6 +391,13 @@
     <string name="search_only_show_results">Show only search results</string>
     <string name="search_count">%d search results</string>
     <!-- Main Page & Settings -->
+    <!--    SDL-->
+    <string name="setting_enable_sdl_controller_backend_title">Enable SDL controller backend</string>
+    <string name="setting_enable_sdl_controller_backend_desc">Enables SDL controller backend. Has better mod support. Falls back to GLFW if disabled.</string>
+
+    <string name="setting_force_sdl_controller_handling_title">Forcibly start SDL controller handling</string>
+    <string name="setting_force_sdl_controller_handling_desc">Can help older controller-mod versions use the SDL backend.</string>
+
     <string name="main_open_main_dir">Open main directory</string>
     <string name="main_install_jar_file">Execute .jar file</string>
     <string name="main_share_logs">Share log files</string>

@@ -16,6 +16,7 @@ import com.movtery.zalithlauncher.feature.version.Version
 import com.movtery.zalithlauncher.renderer.Renderers
 import com.movtery.zalithlauncher.setting.AllSettings
 import com.movtery.zalithlauncher.setting.AllStaticSettings
+import com.movtery.zalithlauncher.setting.Settings
 import com.movtery.zalithlauncher.support.touch_controller.ControllerProxy
 import com.movtery.zalithlauncher.task.TaskExecutors
 import com.movtery.zalithlauncher.ui.dialog.LifecycleAwareTipDialog
@@ -26,6 +27,7 @@ import com.movtery.zalithlauncher.utils.stringutils.StringUtils
 import net.kdt.pojavlaunch.Architecture
 import net.kdt.pojavlaunch.JMinecraftVersionList
 import net.kdt.pojavlaunch.Logger
+import net.kdt.pojavlaunch.MinecraftGLSurface
 import net.kdt.pojavlaunch.Tools
 import net.kdt.pojavlaunch.authenticator.microsoft.PresentedException
 import net.kdt.pojavlaunch.lifecycle.ContextAwareDoneListener
@@ -39,238 +41,322 @@ import net.kdt.pojavlaunch.utils.JREUtils
 import net.kdt.pojavlaunch.value.MinecraftAccount
 import org.greenrobot.eventbus.EventBus
 
-class LaunchGame {
-    companion object {
-        /**
-         * 改为启动游戏前进行的操作
-         * - 进行登录，同时也能及时的刷新账号的信息（这明显更合理不是吗，PojavLauncher？）
-         * - 复制 options.txt 文件到游戏目录
-         * @param version 选择的版本
-         */
-        @JvmStatic
-        fun preLaunch(context: Context, version: Version) {
-            val networkAvailable = NetworkUtils.isNetworkAvailable(context)
+object LaunchGame {
 
-            fun launch(setOfflineAccount: Boolean = false) {
-                version.offlineAccountLogin = setOfflineAccount
+    @JvmStatic
+    fun preLaunch(context: Context, version: Version) {
+        val networkAvailable = NetworkUtils.isNetworkAvailable(context)
 
-                val versionName = version.getVersionName()
-                val mcVersion = AsyncMinecraftDownloader.getListedVersion(versionName)
-                val listener = ContextAwareDoneListener(context, version)
-                //若网络未连接，跳过下载任务直接启动
-                if (!networkAvailable) {
-                    listener.onDownloadDone()
+        if (!networkAvailable) {
+            // Network is unavailable, so online login cannot be performed.
+            // Still allow launch by temporarily using an offline account.
+            Toast.makeText(
+                context,
+                context.getString(R.string.account_login_no_network),
+                Toast.LENGTH_SHORT
+            ).show()
+
+            launchDownloadAndStart(context, version, networkAvailable, setOfflineAccount = true)
+            return
+        }
+
+        if (AccountUtils.isNoLoginRequired(AccountsManager.currentAccount)) {
+            launchDownloadAndStart(context, version, networkAvailable, setOfflineAccount = false)
+            return
+        }
+
+        val currentAccount = AccountsManager.currentAccount ?: run {
+            setGameProgress(false)
+            return
+        }
+
+        AccountsManager.performLogin(
+            context,
+            currentAccount,
+            { _ ->
+                EventBus.getDefault().post(AccountUpdateEvent())
+                TaskExecutors.runInUIThread {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.account_login_done),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                // Login finished, start the game.
+                launchDownloadAndStart(context, version, networkAvailable, setOfflineAccount = false)
+            },
+            { exception ->
+                val errorMessage = if (exception is PresentedException) {
+                    exception.toString(context)
                 } else {
-                    MinecraftDownloader().start(mcVersion, versionName, listener)
+                    exception.message
                 }
-            }
 
-            fun setGameProgress(pull: Boolean) {
-                if (pull) {
-                    ProgressKeeper.submitProgress(ProgressLayout.CHECKING_MODS, 0, R.string.mod_check_progress_message, 0, 0, 0)
-                    ProgressKeeper.submitProgress(ProgressLayout.DOWNLOAD_MINECRAFT, 0, R.string.newdl_downloading_game_files, 0, 0, 0)
-                } else {
-                    ProgressLayout.clearProgress(ProgressLayout.DOWNLOAD_MINECRAFT)
-                    ProgressLayout.clearProgress(ProgressLayout.CHECKING_MODS)
+                TaskExecutors.runInUIThread {
+                    TipDialog.Builder(context)
+                        .setTitle(R.string.generic_error)
+                        .setMessage("${context.getString(R.string.account_login_skip)}\r\n$errorMessage")
+                        .setWarning()
+                        .setConfirmClickListener {
+                            launchDownloadAndStart(
+                                context,
+                                version,
+                                networkAvailable,
+                                setOfflineAccount = true
+                            )
+                        }
+                        .setCenterMessage(false)
+                        .showDialog()
                 }
+
+                setGameProgress(false)
             }
+        )
 
-            if (!networkAvailable) {
-                // 网络未链接，无法登录，但是依旧允许玩家启动游戏 (临时创建一个同名的离线账号启动游戏)
-                Toast.makeText(context, context.getString(R.string.account_login_no_network), Toast.LENGTH_SHORT).show()
-                launch(true)
-                return
-            }
+        setGameProgress(true)
+    }
 
-            if (AccountUtils.isNoLoginRequired(AccountsManager.currentAccount)) {
-                launch()
-                return
-            }
+    private fun launchDownloadAndStart(
+        context: Context,
+        version: Version,
+        networkAvailable: Boolean,
+        setOfflineAccount: Boolean
+    ) {
+        version.offlineAccountLogin = setOfflineAccount
 
-            AccountsManager.performLogin(
-                context, AccountsManager.currentAccount!!,
-                { _ ->
-                    EventBus.getDefault().post(AccountUpdateEvent())
-                    TaskExecutors.runInUIThread {
-                        Toast.makeText(context, context.getString(R.string.account_login_done), Toast.LENGTH_SHORT).show()
-                    }
-                    //登录完成，正式启动游戏！
-                    launch()
-                },
-                { exception ->
-                    val errorMessage = if (exception is PresentedException) exception.toString(context)
-                    else exception.message
+        val versionName = version.getVersionName()
+        val mcVersion = AsyncMinecraftDownloader.getListedVersion(versionName)
+        val listener = ContextAwareDoneListener(context, version)
 
-                    TaskExecutors.runInUIThread {
-                        TipDialog.Builder(context)
-                            .setTitle(R.string.generic_error)
-                            .setMessage("${context.getString(R.string.account_login_skip)}\r\n$errorMessage")
-                            .setWarning()
-                            .setConfirmClickListener { launch(true) }
-                            .setCenterMessage(false)
-                            .showDialog()
-                    }
+        // If the network is unavailable, skip downloading and launch directly.
+        if (!networkAvailable) {
+            listener.onDownloadDone()
+        } else {
+            MinecraftDownloader().start(mcVersion, versionName, listener)
+        }
+    }
 
-                    setGameProgress(false)
-                }
+    private fun setGameProgress(show: Boolean) {
+        if (show) {
+            ProgressKeeper.submitProgress(
+                ProgressLayout.CHECKING_MODS,
+                0,
+                R.string.mod_check_progress_message,
+                0,
+                0,
+                0
             )
-            setGameProgress(true)
-        }
-
-        @Throws(Throwable::class)
-        @JvmStatic
-        fun runGame(activity: AppCompatActivity, minecraftVersion: Version, version: JMinecraftVersionList.Version) {
-            if (!Renderers.isCurrentRendererValid()) {
-                Renderers.setCurrentRenderer(activity, AllSettings.renderer.getValue())
-            }
-
-            var account = AccountsManager.currentAccount!!
-            if (minecraftVersion.offlineAccountLogin) {
-                account = MinecraftAccount().apply {
-                    this.username = account.username
-                    this.accountType = AccountType.LOCAL.type
-                }
-            }
-
-            val customArgs = minecraftVersion.getJavaArgs().takeIf { it.isNotBlank() } ?: ""
-
-            val javaRuntime = getRuntime(activity, minecraftVersion, version.javaVersion?.majorVersion ?: 8)
-
-            printLauncherInfo(
-                minecraftVersion,
-                customArgs.takeIf { it.isNotBlank() } ?: "NONE",
-                javaRuntime,
-                account
+            ProgressKeeper.submitProgress(
+                ProgressLayout.DOWNLOAD_MINECRAFT,
+                0,
+                R.string.newdl_downloading_game_files,
+                0,
+                0,
+                0
             )
+        } else {
+            ProgressLayout.clearProgress(ProgressLayout.DOWNLOAD_MINECRAFT)
+            ProgressLayout.clearProgress(ProgressLayout.CHECKING_MODS)
+        }
+    }
 
-            minecraftVersion.modCheckResult?.let { modCheckResult ->
-                if (modCheckResult.hasTouchController) {
-                    Logger.appendToLog("Mod Perception: TouchController Mod found, attempting to automatically enable control proxy!")
-                    ControllerProxy.startProxy(activity)
-                    AllStaticSettings.useControllerProxy = true
-                }
+    @Throws(Throwable::class)
+    @JvmStatic
+    fun runGame(
+        activity: AppCompatActivity,
+        minecraftVersion: Version,
+        version: JMinecraftVersionList.Version
+    ) {
+        ensureRendererIsValid(activity)
 
-                if (modCheckResult.hasSodiumOrEmbeddium) {
-                    Logger.appendToLog("Mod Perception: Sodium or Embeddium Mod found, attempting to load the disable warning tool later!")
-                }
+        var account = AccountsManager.currentAccount!!
+        if (minecraftVersion.offlineAccountLogin) {
+            account = MinecraftAccount().apply {
+                username = account.username
+                accountType = AccountType.LOCAL.type
+            }
+        }
+
+        val customArgs = minecraftVersion.getJavaArgs().takeIf { it.isNotBlank() } ?: ""
+        val javaRuntime = resolveRuntime(
+            activity,
+            minecraftVersion,
+            version.javaVersion?.majorVersion ?: 8
+        )
+        val gameDir = minecraftVersion.getGameDir()
+
+        Tools.startOldLegacy4JMitigation(activity, gameDir)
+        Tools.startControllableMitigation(activity, gameDir)
+
+        logLaunchInfo(
+            minecraftVersion = minecraftVersion,
+            javaArguments = customArgs.ifBlank { "NONE" },
+            javaRuntime = javaRuntime,
+            account = account
+        )
+
+        minecraftVersion.modCheckResult?.let { modCheckResult ->
+            if (modCheckResult.hasTouchController) {
+                Logger.appendToLog(
+                    "Mod Perception: TouchController mod found, enabling controller proxy automatically."
+                )
+                ControllerProxy.startProxy(activity)
+                AllStaticSettings.useControllerProxy = true
             }
 
-            JREUtils.redirectAndPrintJRELog()
-
-            launch(activity, account, minecraftVersion, javaRuntime, customArgs)
-
-            //Note that we actually stall in the above function, even if the game crashes. But let's be safe.
-            GameService.setActive(false)
+            if (modCheckResult.hasSodiumOrEmbeddium) {
+                Logger.appendToLog(
+                    "Mod Perception: Sodium or Embeddium found, disable-warning tool may be loaded later."
+                )
+            }
+            if (modCheckResult.isLegacy4j) {
+                Logger.appendToLog(
+                    "Mod Perception: Legacy4J mod found, disable-warning tool maybe loaded later."
+                )
+                Settings.Manager.put(AllSettings.gamepadSdlPassthru.key, true).save()
+                MinecraftGLSurface.sdlEnabled = true;
+            }
         }
 
-        private fun getRuntime(activity: Activity, version: Version, targetJavaVersion: Int): String {
-            val versionRuntime = version.getJavaDir()
-                .takeIf { it.isNotEmpty() && it.startsWith(Tools.LAUNCHERPROFILES_RTPREFIX) }
-                ?.removePrefix(Tools.LAUNCHERPROFILES_RTPREFIX)
-                ?: ""
+        JREUtils.redirectAndPrintJRELog()
+        launchJvm(activity, account, minecraftVersion, javaRuntime, customArgs)
 
-            if (versionRuntime.isNotEmpty()) return versionRuntime
+        // We usually block in the launch call above even if the game crashes,
+        // but reset this anyway to be safe.
+        GameService.setActive(false)
+    }
 
-            //如果版本未选择Java环境，则自动选择合适的环境
-            var runtime = AllSettings.defaultRuntime.getValue()
-            val pickedRuntime = MultiRTUtils.read(runtime)
-            if (pickedRuntime.javaVersion == 0 || pickedRuntime.javaVersion < targetJavaVersion) {
-                runtime = MultiRTUtils.getNearestJreName(targetJavaVersion) ?: run {
-                    activity.runOnUiThread {
-                        Toast.makeText(activity, activity.getString(R.string.game_autopick_runtime_failed), Toast.LENGTH_SHORT).show()
-                    }
-                    return runtime
+    private fun ensureRendererIsValid(activity: AppCompatActivity) {
+        if (!Renderers.isCurrentRendererValid()) {
+            Renderers.setCurrentRenderer(activity, AllSettings.renderer.getValue())
+        }
+    }
+
+    private fun resolveRuntime(
+        activity: Activity,
+        version: Version,
+        targetJavaVersion: Int
+    ): String {
+        val versionRuntime = version.getJavaDir()
+            .takeIf { it.isNotEmpty() && it.startsWith(Tools.LAUNCHERPROFILES_RTPREFIX) }
+            ?.removePrefix(Tools.LAUNCHERPROFILES_RTPREFIX)
+            ?: ""
+
+        if (versionRuntime.isNotEmpty()) {
+            return versionRuntime
+        }
+
+        // If no Java runtime is selected for this version, choose one automatically.
+        var runtime = AllSettings.defaultRuntime.getValue()
+        val pickedRuntime = MultiRTUtils.read(runtime)
+
+        if (pickedRuntime.javaVersion == 0 || pickedRuntime.javaVersion < targetJavaVersion) {
+            runtime = MultiRTUtils.getNearestJreName(targetJavaVersion) ?: run {
+                activity.runOnUiThread {
+                    Toast.makeText(
+                        activity,
+                        activity.getString(R.string.game_autopick_runtime_failed),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
+                return runtime
             }
-            return runtime
         }
 
-        private fun printLauncherInfo(
-            minecraftVersion: Version,
-            javaArguments: String,
-            javaRuntime: String,
-            account: MinecraftAccount
-        ) {
-            var mcInfo = minecraftVersion.getVersionName()
-            minecraftVersion.getVersionInfo()?.let { info ->
-                mcInfo = info.getInfoString()
-            }
+        return runtime
+    }
 
-            Logger.appendToLog("--------- Start launching the game")
-            Logger.appendToLog("Info: Launcher version: ${ZHTools.getVersionName()} (${ZHTools.getVersionCode()})")
-            Logger.appendToLog("Info: Architecture: ${Architecture.archAsString(Tools.DEVICE_ARCHITECTURE)}")
-            Logger.appendToLog("Info: Device model: ${StringUtils.insertSpace(Build.MANUFACTURER, Build.MODEL)}")
-            Logger.appendToLog("Info: API version: ${Build.VERSION.SDK_INT}")
-            Logger.appendToLog("Info: Renderer: ${Renderers.getCurrentRenderer().getRendererName()}")
-            Logger.appendToLog("Info: Selected Minecraft version: ${minecraftVersion.getVersionName()}")
-            Logger.appendToLog("Info: Minecraft Info: $mcInfo")
-            Logger.appendToLog("Info: Game Path: ${minecraftVersion.getGameDir().absolutePath} (Isolation: ${minecraftVersion.isIsolation()})")
-            Logger.appendToLog("Info: Custom Java arguments: $javaArguments")
-            Logger.appendToLog("Info: Java Runtime: $javaRuntime")
-            Logger.appendToLog("Info: Account: ${account.username} (${account.accountType})")
-            Logger.appendToLog("---------\r\n")
+    private fun logLaunchInfo(
+        minecraftVersion: Version,
+        javaArguments: String,
+        javaRuntime: String,
+        account: MinecraftAccount
+    ) {
+        val mcInfo = minecraftVersion.getVersionInfo()?.getInfoString()
+            ?: minecraftVersion.getVersionName()
+
+        Logger.appendToLog("--------- Start launching the game")
+        Logger.appendToLog("Info: Launcher version: ${ZHTools.getVersionName()} (${ZHTools.getVersionCode()})")
+        Logger.appendToLog("Info: Architecture: ${Architecture.archAsString(Tools.DEVICE_ARCHITECTURE)}")
+        Logger.appendToLog("Info: Device model: ${StringUtils.insertSpace(Build.MANUFACTURER, Build.MODEL)}")
+        Logger.appendToLog("Info: API version: ${Build.VERSION.SDK_INT}")
+        Logger.appendToLog("Info: Renderer: ${Renderers.getCurrentRenderer().getRendererName()}")
+        Logger.appendToLog("Info: Selected Minecraft version: ${minecraftVersion.getVersionName()}")
+        Logger.appendToLog("Info: Minecraft info: $mcInfo")
+        Logger.appendToLog("Info: Game path: ${minecraftVersion.getGameDir().absolutePath} (Isolation: ${minecraftVersion.isIsolation()})")
+        Logger.appendToLog("Info: Custom Java arguments: $javaArguments")
+        Logger.appendToLog("Info: Java runtime: $javaRuntime")
+        Logger.appendToLog("Info: Account: ${account.username} (${account.accountType})")
+        Logger.appendToLog("---------\r\n")
+    }
+
+    @Throws(Throwable::class)
+    @JvmStatic
+    private fun launchJvm(
+        activity: AppCompatActivity,
+        account: MinecraftAccount,
+        minecraftVersion: Version,
+        javaRuntime: String,
+        customArgs: String
+    ) {
+        warnIfMemoryIsInsufficient(activity)
+
+        val runtime = MultiRTUtils.forceReread(javaRuntime)
+        val versionInfo = Tools.getVersionInfo(minecraftVersion)
+        val gameDirPath = minecraftVersion.getGameDir()
+
+        // Pre-launch preparation.
+        Tools.disableSplash(gameDirPath)
+        val launchClassPath = Tools.generateLaunchClassPath(versionInfo, minecraftVersion)
+
+        val launchArgs = LaunchArgs(
+            account,
+            gameDirPath,
+            minecraftVersion,
+            versionInfo,
+            minecraftVersion.getVersionName(),
+            runtime,
+            launchClassPath
+        ).getAllArgs()
+
+        FFmpegPlugin.discover(activity)
+        JREUtils.launchWithUtils(activity, runtime, minecraftVersion, launchArgs, customArgs)
+    }
+
+    private fun warnIfMemoryIsInsufficient(activity: AppCompatActivity) {
+        var freeDeviceMemory = Tools.getFreeDeviceMemory(activity)
+        val freeAddressSpace = if (Architecture.is32BitsDevice()) {
+            Tools.getMaxContinuousAddressSpaceSize()
+        } else {
+            -1
         }
 
-        @Throws(Throwable::class)
-        @JvmStatic
-        private fun launch(
-            activity: AppCompatActivity,
-            account: MinecraftAccount,
-            minecraftVersion: Version,
-            javaRuntime: String,
-            customArgs: String
-        ) {
-            checkMemory(activity)
+        Logging.i("MemStat", "Free RAM: $freeDeviceMemory Addressable: $freeAddressSpace")
 
-            val runtime = MultiRTUtils.forceReread(javaRuntime)
-
-            val versionInfo = Tools.getVersionInfo(minecraftVersion)
-            val gameDirPath = minecraftVersion.getGameDir()
-
-            //预处理
-            Tools.disableSplash(gameDirPath)
-            val launchClassPath = Tools.generateLaunchClassPath(versionInfo, minecraftVersion)
-
-            val launchArgs = LaunchArgs(
-                account,
-                gameDirPath,
-                minecraftVersion,
-                versionInfo,
-                minecraftVersion.getVersionName(),
-                runtime,
-                launchClassPath
-            ).getAllArgs()
-
-            FFmpegPlugin.discover(activity)
-
-            JREUtils.launchWithUtils(activity, runtime, minecraftVersion, launchArgs, customArgs)
+        val stringId = if (freeDeviceMemory > freeAddressSpace && freeAddressSpace != -1) {
+            freeDeviceMemory = freeAddressSpace
+            R.string.address_memory_warning_msg
+        } else {
+            R.string.memory_warning_msg
         }
 
-        private fun checkMemory(activity: AppCompatActivity) {
-            var freeDeviceMemory = Tools.getFreeDeviceMemory(activity)
-            val freeAddressSpace =
-                if (Architecture.is32BitsDevice())
-                    Tools.getMaxContinuousAddressSpaceSize()
-                else -1
-            Logging.i("MemStat",
-                "Free RAM: $freeDeviceMemory Addressable: $freeAddressSpace")
+        if (AllSettings.ramAllocation.value.getValue() > freeDeviceMemory) {
+            val builder = TipDialog.Builder(activity)
+                .setTitle(R.string.generic_warning)
+                .setMessage(
+                    activity.getString(
+                        stringId,
+                        freeDeviceMemory,
+                        AllSettings.ramAllocation.value.getValue()
+                    )
+                )
+                .setWarning()
+                .setCenterMessage(false)
+                .setShowCancel(false)
 
-            val stringId: Int = if (freeDeviceMemory > freeAddressSpace && freeAddressSpace != -1) {
-                freeDeviceMemory = freeAddressSpace
-                R.string.address_memory_warning_msg
-            } else R.string.memory_warning_msg
-
-            if (AllSettings.ramAllocation.value.getValue() > freeDeviceMemory) {
-                val builder = TipDialog.Builder(activity)
-                    .setTitle(R.string.generic_warning)
-                    .setMessage(activity.getString(stringId, freeDeviceMemory, AllSettings.ramAllocation.value.getValue()))
-                    .setWarning()
-                    .setCenterMessage(false)
-                    .setShowCancel(false)
-                if (LifecycleAwareTipDialog.haltOnDialog(activity.lifecycle, builder)) return
-                // If the dialog's lifecycle has ended, return without
-                // actually launching the game, thus giving us the opportunity
-                // to start after the activity is shown again
+            if (LifecycleAwareTipDialog.haltOnDialog(activity.lifecycle, builder)) {
+                return
             }
         }
     }

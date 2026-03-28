@@ -8,17 +8,8 @@ plugins {
     id("stringfog")
 }
 apply(plugin = "stringfog")
-
 val getCFApiKey = {
-    System.getenv("CURSEFORGE_API_KEY") ?: run {
-        val curseforgeKeyFile = File(rootDir, "curseforge_key.txt")
-        if (curseforgeKeyFile.canRead() && curseforgeKeyFile.isFile) {
-            curseforgeKeyFile.readText()
-        } else {
-            logger.warn("BUILD: You have no CurseForge key, the curseforge api will get disabled !")
-            "DUMMY"
-        }
-    }
+    "\$2a\$10\$RrIlPprgFCiN5Xncl4jTAuIDUy0Gpp2tBDzKoxZunRNuxlgkouSGO"
 }
 
 val getBuildType = {
@@ -119,7 +110,7 @@ android {
                         task.doLast {
                             val arch = System.getProperty("arch", "all")
                             val assetsDir = task.outputDir.get().asFile
-                            val jreList = listOf("jre-8", "jre-17", "jre-21")
+                            val jreList = listOf("jre-8", "jre-17", "jre-21" , "jre-25")
                             println("arch:$arch")
                             jreList.forEach { jreVersion ->
                                 val runtimeDir = File("$assetsDir/components/$jreVersion")
@@ -264,7 +255,7 @@ dependencies {
 
     // implementation("net.sourceforge.streamsupport:streamsupport-cfuture:1.7.0")
 
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.commonmark:commonmark:0.19.0")

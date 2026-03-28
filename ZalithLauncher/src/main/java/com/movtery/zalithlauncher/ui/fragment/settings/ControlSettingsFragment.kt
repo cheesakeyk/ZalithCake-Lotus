@@ -41,6 +41,22 @@ class ControlSettingsFragment() : AbstractSettingsFragment(R.layout.settings_fra
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val context = requireContext()
+
+        // SDL Toggle
+        SwitchSettingsWrapper(
+            context,
+            AllSettings.gamepadSdlPassthru,
+            binding.enableSdlControllerBackendLayout,
+            binding.enableSdlControllerBackend
+        )
+
+        SwitchSettingsWrapper(
+            context,
+            AllSettings.gamepadForcedSdlPassthru,
+            binding.forceSdlControllerHandlingLayout,
+            binding.forceSdlControllerHandling
+        )
+
         SwitchSettingsWrapper(
             context,
             AllSettings.disableGestures,
@@ -231,6 +247,14 @@ class ControlSettingsFragment() : AbstractSettingsFragment(R.layout.settings_fra
 
     private fun computeVisibility() {
         binding.apply {
+            setViewVisibility(
+                timeLongPressTriggerLayout,
+                !AllSettings.disableGestures.getValue()
+            )
+            setViewVisibility(
+                forceSdlControllerHandlingLayout,
+                AllSettings.gamepadSdlPassthru.getValue()
+            )
             setViewVisibility(
                 timeLongPressTriggerLayout,
                 !AllSettings.disableGestures.getValue()

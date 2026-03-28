@@ -1,5 +1,6 @@
 package net.kdt.pojavlaunch;
 
+import static androidx.fragment.app.FragmentManager.TAG;
 import static net.kdt.pojavlaunch.MainActivity.touchCharInput;
 import static org.lwjgl.glfw.CallbackBridge.sendMouseButton;
 import static org.lwjgl.glfw.CallbackBridge.windowHeight;
@@ -9,6 +10,7 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -31,6 +33,8 @@ import com.movtery.zalithlauncher.ui.activity.BaseActivity;
 import net.kdt.pojavlaunch.customcontrols.ControlLayout;
 import net.kdt.pojavlaunch.customcontrols.gamepad.DefaultDataProvider;
 import net.kdt.pojavlaunch.customcontrols.gamepad.Gamepad;
+import net.kdt.pojavlaunch.customcontrols.gamepad.direct.DirectGamepad;
+import net.kdt.pojavlaunch.customcontrols.gamepad.direct.DirectGamepadEnableHandler;
 import net.kdt.pojavlaunch.customcontrols.mouse.AbstractTouchpad;
 import net.kdt.pojavlaunch.customcontrols.mouse.AndroidPointerCapture;
 import net.kdt.pojavlaunch.customcontrols.mouse.InGUIEventProcessor;
@@ -39,19 +43,24 @@ import net.kdt.pojavlaunch.customcontrols.mouse.TouchEventProcessor;
 import net.kdt.pojavlaunch.utils.JREUtils;
 
 import org.greenrobot.eventbus.EventBus;
+import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLControllerManager;
 import org.lwjgl.glfw.CallbackBridge;
 
 import java.util.Locale;
 
+import fr.spse.gamepad_remapper.GamepadHandler;
 import fr.spse.gamepad_remapper.RemapperManager;
 import fr.spse.gamepad_remapper.RemapperView;
 
 /**
  * Class dealing with showing minecraft surface and taking inputs to dispatch them to minecraft
  */
-public class MinecraftGLSurface extends View implements GrabListener {
+public class MinecraftGLSurface extends View implements GrabListener, DirectGamepadEnableHandler {
+    public static boolean sdlEnabled = false;
     /* Gamepad object for gamepad inputs, instantiated on need */
     private Gamepad mGamepad = null;
+    private GamepadHandler mGamepadHandler;
     /* The RemapperView.Builder object allows you to set which buttons to remap */
     private final RemapperManager mInputManager = new RemapperManager(getContext(), new RemapperView.Builder(null)
             .remapA(true)
@@ -94,13 +103,15 @@ public class MinecraftGLSurface extends View implements GrabListener {
     public MinecraftGLSurface(Context context, AttributeSet attributeSet) {
         super(context, attributeSet);
         setFocusable(true);
+        CallbackBridge.setDirectGamepadEnableHandler(this);
+        SDLControllerManager.setDirectGamepadEnableHandler(this);
+        //CallbackBridge.createGamepadAxisBuffer();
     }
 
     private void setUpPointerCapture(AbstractTouchpad touchpad) {
         if(mPointerCapture != null) mPointerCapture.detach();
         mPointerCapture = new AndroidPointerCapture(touchpad, this);
     }
-
     /** Initialize the view and all its settings
      * @param isAlreadyRunning set to true to tell the view that the game is already running
      *                         (only updates the window without calling the start listener)
@@ -213,21 +224,40 @@ public class MinecraftGLSurface extends View implements GrabListener {
     }
 
     private void createGamepad(View contextView, InputDevice inputDevice) {
-        mGamepad = new Gamepad(contextView, inputDevice, DefaultDataProvider.INSTANCE, true);
+        if (CallbackBridge.sGamepadDirectInput && !sdlEnabled) {
+            mGamepadHandler = new DirectGamepad();
+        } else if (!sdlEnabled) {
+            mGamepadHandler = new Gamepad(contextView, inputDevice, DefaultDataProvider.INSTANCE, true);
+        } else {
+            mGamepadHandler = (code, value) -> {};
+        }
+        //mGamepad = new Gamepad(contextView, inputDevice, DefaultDataProvider.INSTANCE, true);
     }
 
     /**
      * The event for mouse/joystick movements
      */
-    @SuppressLint("NewApi")
+    @SuppressLint({"NewApi", "RestrictedApi"})
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if(sdlEnabled && Gamepad.isGamepadEvent(event)) {
+            final MotionEvent copy = MotionEvent.obtain(event);
+            PojavApplication.sExecutorService.execute(()->{
+                try {
+                    MainActivity.motionListener.onGenericMotion(this, copy);
+                    copy.recycle();
+                } catch (Throwable ignored) {
+                    Log.e(TAG, "SDL failed to send motionevent!");
+                }
+            });
+            return true;
+        }
+        super.dispatchGenericMotionEvent(event);
         int mouseCursorIndex = -1;
-
-        if(Gamepad.isGamepadEvent(event)){
-            if(mGamepad == null) createGamepad(this, event.getDevice());
-
-            mInputManager.handleMotionEventInput(getContext(), event, mGamepad);
+        if(!sdlEnabled && Gamepad.isGamepadEvent(event)){
+            //TODO Check differences Amethyst uses mGamepadHandler
+            if(mGamepadHandler == null) createGamepad(this, event.getDevice());
+            mInputManager.handleMotionEventInput(getContext(), event, mGamepadHandler);
             return true;
         }
 
@@ -238,10 +268,8 @@ public class MinecraftGLSurface extends View implements GrabListener {
             break;
         }
         if(mouseCursorIndex == -1) return false; // we cant consoom that, theres no mice!
-
         // Make sure we grabbed the mouse if necessary
         updateGrabState(CallbackBridge.isGrabbing());
-
         switch(event.getActionMasked()) {
             case MotionEvent.ACTION_HOVER_MOVE:
                 CallbackBridge.mouseX = (event.getX(mouseCursorIndex) * AllStaticSettings.scaleFactor);
@@ -269,6 +297,7 @@ public class MinecraftGLSurface extends View implements GrabListener {
     }
 
     /** The event for keyboard/ gamepad button inputs */
+    @SuppressLint("RestrictedApi")
     public boolean processKeyEvent(KeyEvent event) {
         //Log.i("KeyEvent", event.toString());
 
@@ -304,10 +333,24 @@ public class MinecraftGLSurface extends View implements GrabListener {
             }
         }
 
-        if(Gamepad.isGamepadEvent(event)){
-            if(mGamepad == null) createGamepad(this, event.getDevice());
-
-            mInputManager.handleKeyEventInput(getContext(), event, mGamepad);
+        // Android bundles in garbage KeyEvents for compatibility with old apps
+        // that don't have controller code so we are, checking for em.
+        boolean isGamepadEvent = Gamepad.isGamepadEvent(event);
+        if (sdlEnabled && isGamepadEvent) {
+            final KeyEvent copy = new KeyEvent(event);
+            PojavApplication.sExecutorService.execute(() -> {
+                try {
+                    SDLActivity.handleKeyEvent(this, eventKeycode, copy, null);
+                } catch (Throwable ignored) {
+                    Log.e(TAG, "SDL failed to send keyevent!");
+                }
+            });
+            return true;
+        }
+        //TODO Check later Amethyst uses mGamePadHandler instead of mGamepad
+        if(!sdlEnabled && isGamepadEvent){
+            if(mGamepadHandler == null) createGamepad(this, event.getDevice());
+            mInputManager.handleKeyEventInput(getContext(), event, mGamepadHandler);
             return true;
         }
 
@@ -341,10 +384,6 @@ public class MinecraftGLSurface extends View implements GrabListener {
         sendMouseButton(glfwButton, status);
         return true;
     }
-
-
-
-
 
     /** Called when the size need to be set at any point during the surface lifecycle **/
     public void refreshSize() {
@@ -418,6 +457,16 @@ public class MinecraftGLSurface extends View implements GrabListener {
             mCurrentTouchProcessor = pickEventProcessor(isGrabbing);
             mLastGrabState = isGrabbing;
         }
+    }
+    @Override
+    public void onDirectGamepadEnabled() {
+        post(()->{
+            if(mGamepadHandler != null && mGamepadHandler instanceof Gamepad) {
+                ((Gamepad)mGamepadHandler).removeSelf();
+            }
+            // Force gamepad recreation on next event
+            mGamepadHandler = null;
+        });
     }
 
     /** A small interface called when the listener is ready for the first time */

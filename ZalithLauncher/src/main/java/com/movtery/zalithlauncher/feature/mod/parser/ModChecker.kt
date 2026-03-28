@@ -1,5 +1,6 @@
 package com.movtery.zalithlauncher.feature.mod.parser
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Parcel
 import android.os.Parcelable
@@ -16,6 +17,7 @@ class ModChecker {
     class ModCheckResult() : Parcelable {
         var hasTouchController: Boolean = false
         var hasSodiumOrEmbeddium: Boolean = false
+        var isLegacy4j: Boolean = false;
         var hasPhysics: Boolean = false
         var hasMCEF: Boolean = false
         var hasValkyrienSkies: Boolean = false
@@ -30,6 +32,7 @@ class ModChecker {
         constructor(parcel: Parcel) : this() {
             hasTouchController = parcel.readInt().toBoolean()
             hasSodiumOrEmbeddium = parcel.readInt().toBoolean()
+            isLegacy4j = parcel.readInt().toBoolean()
             hasPhysics = parcel.readInt().toBoolean()
             hasMCEF = parcel.readInt().toBoolean()
             hasValkyrienSkies = parcel.readInt().toBoolean()
@@ -44,6 +47,7 @@ class ModChecker {
         override fun writeToParcel(dest: Parcel, flags: Int) {
             dest.writeInt(hasTouchController.getInt())
             dest.writeInt(hasSodiumOrEmbeddium.getInt())
+            dest.writeInt(isLegacy4j.getInt())
             dest.writeInt(hasPhysics.getInt())
             dest.writeInt(hasMCEF.getInt())
             dest.writeInt(hasValkyrienSkies.getInt())
@@ -67,6 +71,7 @@ class ModChecker {
     /**
      * 检查所有模组，并对一些已知的模组进行判断
      */
+    @SuppressLint("StringFormatInvalid")
     fun check(context: Context, modInfoList: List<ModInfo>, executeTask: (ModCheckResult?) -> Unit) {
         runCatching {
             val modCheckSettings = mutableMapOf<AllModCheckSettings, Pair<String, String>>()
@@ -179,6 +184,15 @@ class ModChecker {
                             modCheckSettings[AllModCheckSettings.BORDERLESS_WINDOW] = Pair(
                                 "1",
                                 context.getString(R.string.mod_check_borderlesswindow, mod.file.name)
+                            )
+                        }
+                    }
+                    "legacy" -> {
+                        if (!modResult.isLegacy4j) {
+                            modResult.isLegacy4j = true
+                            modCheckSettings[AllModCheckSettings.IS_LEGACY] = Pair(
+                                "1",
+                                context.getString(R.string.mod_check_isLegacy4J, mod.file.name)
                             )
                         }
                     }

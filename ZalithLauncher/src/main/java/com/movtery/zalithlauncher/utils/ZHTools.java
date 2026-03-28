@@ -51,34 +51,32 @@ import net.kdt.pojavlaunch.Tools;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatterBuilder;
-import java.time.format.DateTimeParseException;
-import java.time.temporal.ChronoField;
 import java.util.Date;
 import java.util.Locale;
 import java.util.zip.ZipOutputStream;
 
 public final class ZHTools {
+    private static final String TAG_ZIP_LOG = "Zip Log";
+    private static final String TAG_VENDOR_CHECK = "CheckVendor";
+    private static final String DATE_TIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
     private ZHTools() {
     }
 
-    public static void onBackPressed(FragmentActivity fragmentActivity) {
-        fragmentActivity.getOnBackPressedDispatcher().onBackPressed();
+    public static void onBackPressed(FragmentActivity activity) {
+        activity.getOnBackPressedDispatcher().onBackPressed();
     }
 
     public static boolean isEnglish(Context context) {
         LocaleList locales = context.getResources().getConfiguration().getLocales();
-        return locales.get(0).getLanguage().equals("en");
+        return !locales.isEmpty() && "en".equals(locales.get(0).getLanguage());
     }
 
     public static boolean isChinese(Context context) {
         Locale locale = context.getResources().getConfiguration().getLocales().get(0);
-        return locale.equals(Locale.SIMPLIFIED_CHINESE);
+        return Locale.SIMPLIFIED_CHINESE.equals(locale);
     }
 
     public static void setTooltipText(ImageView... views) {
@@ -91,51 +89,58 @@ public final class ZHTools {
         TooltipCompat.setTooltipText(view, tooltip);
     }
 
-    public synchronized static Drawable customMouse(Context context) {
+    public static synchronized Drawable customMouse(Context context) {
         File mouseFile = getCustomMouse();
-        if (mouseFile == null) {
-            return ResourcesCompat.getDrawable(context.getResources(), R.drawable.ic_mouse_pointer, context.getTheme());
-        }
-
-        // 鼠标：自定义鼠标图片
-        if (mouseFile.exists()) {
+        if (mouseFile != null && mouseFile.exists()) {
             return Drawable.createFromPath(mouseFile.getAbsolutePath());
-        } else {
-            return ResourcesCompat.getDrawable(context.getResources(), R.drawable.ic_mouse_pointer, context.getTheme());
         }
+        return ResourcesCompat.getDrawable(
+                context.getResources(),
+                R.drawable.ic_mouse_pointer,
+                context.getTheme()
+        );
     }
 
     public static File getCustomMouse() {
         String customMouse = AllSettings.getCustomMouse().getValue();
-        if (customMouse.isEmpty()) return null;
+        if (customMouse == null || customMouse.isEmpty()) {
+            return null;
+        }
         return new File(PathManager.DIR_CUSTOM_MOUSE, customMouse);
     }
 
-    public static void dialogForceClose(Context ctx) {
-        new TipDialog.Builder(ctx)
+    public static void dialogForceClose(Context context) {
+        new TipDialog.Builder(context)
                 .setTitle(R.string.option_force_close)
                 .setMessage(R.string.force_exit_confirm)
                 .setConfirmClickListener(checked -> {
                     try {
-                        ZHTools.killProcess();
-                    } catch (Throwable th) {
-                        Logging.w(InfoDistributor.LAUNCHER_NAME, "Could not enable System.exit() method!", th);
+                        killProcess();
+                    } catch (Throwable throwable) {
+                        Logging.w(
+                                InfoDistributor.LAUNCHER_NAME,
+                                "Could not force close the process.",
+                                throwable
+                        );
                     }
-                }).showDialog();
+                })
+                .showDialog();
     }
 
     /**
-     * 展示一个提示弹窗，告知用户接下来将要在浏览器内访问的链接，用户可以选择不进行访问
-     * @param link 要访问的链接
+     * Shows a confirmation dialog before opening a link in the browser.
+     *
+     * @param link the link to open
      */
     public static void openLink(Context context, String link) {
         openLink(context, link, null);
     }
 
     /**
-     * 展示一个提示弹窗，告知用户接下来将要在浏览器内访问的链接，用户可以选择不进行访问
-     * @param link 要访问的链接
-     * @param dataType 设置 intent 的数据以及显式 MIME 数据类型
+     * Shows a confirmation dialog before opening a link or URI in another app.
+     *
+     * @param link the link to open
+     * @param dataType optional MIME type for the intent
      */
     public static void openLink(Context context, String link, String dataType) {
         new TipDialog.Builder(context)
@@ -143,15 +148,16 @@ public final class ZHTools {
                 .setMessage(link)
                 .setConfirmClickListener(checked -> {
                     Uri uri = Uri.parse(link);
-                    Intent browserIntent;
+                    Intent intent;
                     if (dataType != null) {
-                        browserIntent = new Intent(Intent.ACTION_VIEW);
-                        browserIntent.setDataAndType(uri, dataType);
+                        intent = new Intent(Intent.ACTION_VIEW);
+                        intent.setDataAndType(uri, dataType);
                     } else {
-                        browserIntent = new Intent(Intent.ACTION_VIEW, uri);
+                        intent = new Intent(Intent.ACTION_VIEW, uri);
                     }
-                    context.startActivity(browserIntent);
-                }).showDialog();
+                    context.startActivity(intent);
+                })
+                .showDialog();
     }
 
     public static void swapFragmentWithAnim(
@@ -163,6 +169,7 @@ public final class ZHTools {
         if (fragment instanceof FragmentWithAnim) {
             ((FragmentWithAnim) fragment).slideOut();
         }
+
         getFragmentTransaction(fragment)
                 .replace(R.id.container_fragment, fragmentClass, bundle, fragmentTag)
                 .addToBackStack(fragmentClass.getName())
@@ -183,10 +190,18 @@ public final class ZHTools {
     }
 
     private static FragmentTransaction getFragmentTransaction(Fragment fragment) {
-        FragmentTransaction transaction = fragment.requireActivity().getSupportFragmentManager().beginTransaction();
+        FragmentTransaction transaction =
+                fragment.requireActivity().getSupportFragmentManager().beginTransaction();
+
         if (AllSettings.getAnimation().getValue()) {
-            transaction.setCustomAnimations(R.anim.cut_into, R.anim.cut_out, R.anim.cut_into, R.anim.cut_out);
+            transaction.setCustomAnimations(
+                    R.anim.cut_into,
+                    R.anim.cut_out,
+                    R.anim.cut_into,
+                    R.anim.cut_out
+            );
         }
+
         return transaction.setReorderingAllowed(true);
     }
 
@@ -206,75 +221,53 @@ public final class ZHTools {
         return BuildConfig.APPLICATION_ID;
     }
 
-    //获取软件上一次更新时间
+    /**
+     * Returns the last update time of the app package.
+     */
     public static String getLastUpdateTime(Context context) {
-        PackageManager packageManager = context.getPackageManager();
         try {
-            PackageInfo packageInfo = packageManager.getPackageInfo(context.getPackageName(), 0);
+            PackageInfo packageInfo =
+                    context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
             Date date = new Date(packageInfo.lastUpdateTime);
-
-            SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
-            return simpleDateFormat.format(date);
+            return new SimpleDateFormat(DATE_TIME_FORMAT, Locale.getDefault()).format(date);
         } catch (PackageManager.NameNotFoundException e) {
             throw new RuntimeException(e);
         }
     }
 
-    /**
-     * @return 启动器是否为预发布版
-     */
     public static boolean isPreRelease() {
         return "PRE_RELEASE".equals(InfoDistributor.BUILD_TYPE);
     }
 
-    /**
-     * @return 启动器是否为正式版
-     */
     public static boolean isRelease() {
         return "RELEASE".equals(InfoDistributor.BUILD_TYPE);
     }
 
-    /**
-     * @return 启动器是否为测试版
-     */
     public static boolean isDebug() {
         return "DEBUG".equals(InfoDistributor.BUILD_TYPE);
     }
 
-    //获取版本状态信息
+    /**
+     * Returns the localized launcher build type string.
+     */
     public static String getVersionStatus(Context context) {
-        String status;
-        if (isPreRelease()) status = context.getString(R.string.generic_pre_release);
-        else if (isRelease()) status = context.getString(R.string.generic_release);
-        else status = context.getString(R.string.generic_debug);
-
-        return status;
+        if (isPreRelease()) {
+            return context.getString(R.string.generic_pre_release);
+        }
+        if (isRelease()) {
+            return context.getString(R.string.generic_release);
+        }
+        return context.getString(R.string.generic_debug);
     }
 
     public static Date getDate(String dateString) {
-        DateTimeFormatter formatter = new DateTimeFormatterBuilder()
-                .appendPattern("yyyy-MM-dd'T'HH:mm:ss")
-                .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
-                .appendPattern("[XXX][X]")
-                .toFormatter()
-                .withZone(ZoneOffset.UTC);
-
-        Instant instant;
-        try {
-            instant = Instant.from(formatter.parse(dateString));
-        } catch (DateTimeParseException e) {
-            try {
-                instant = Instant.parse(dateString);
-            } catch (DateTimeParseException e2) {
-                instant = OffsetDateTime.parse(dateString).toInstant();
-            }
-        }
-        return Date.from(instant);
+        return Date.from(OffsetDateTime.parse(dateString).toInstant());
     }
 
     public static boolean checkDate(int month, int day) {
         LocalDate currentDate = LocalDate.now();
-        return currentDate.getMonthValue() == month && currentDate.getDayOfMonth() == day;
+        return currentDate.getMonthValue() == month
+                && currentDate.getDayOfMonth() == day;
     }
 
     public static boolean areaChecks(String area) {
@@ -302,10 +295,9 @@ public final class ZHTools {
     }
 
     public static AlertDialog createTaskRunningDialog(Context context, String message) {
-        LayoutInflater inflater = LayoutInflater.from(context);
-        View dialogView = inflater.inflate(R.layout.view_task_running, null);
-
+        View dialogView = LayoutInflater.from(context).inflate(R.layout.view_task_running, null);
         TextView textView = dialogView.findViewById(R.id.text_view);
+
         if (textView != null && message != null) {
             textView.setText(message);
         }
@@ -331,64 +323,84 @@ public final class ZHTools {
     public static boolean isAdrenoGPU() {
         EGLDisplay eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
         if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
-            Logging.e("CheckVendor", "Failed to get EGL display");
+            Logging.e(TAG_VENDOR_CHECK, "Failed to get EGL display");
             return false;
         }
 
         if (!EGL14.eglInitialize(eglDisplay, null, 0, null, 0)) {
-            Logging.e("CheckVendor", "Failed to initialize EGL");
+            Logging.e(TAG_VENDOR_CHECK, "Failed to initialize EGL");
             return false;
         }
 
-        int[] eglAttributes = new int[]{
+        int[] eglAttributes = {
                 EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
                 EGL14.EGL_NONE
         };
 
         EGLConfig[] configs = new EGLConfig[1];
         int[] numConfigs = new int[1];
-        if (!EGL14.eglChooseConfig(eglDisplay, eglAttributes, 0, configs, 0, 1, numConfigs, 0) || numConfigs[0] == 0) {
+        if (!EGL14.eglChooseConfig(eglDisplay, eglAttributes, 0, configs, 0, 1, numConfigs, 0)
+                || numConfigs[0] == 0) {
             EGL14.eglTerminate(eglDisplay);
-            Logging.e("CheckVendor", "Failed to choose an EGL config");
+            Logging.e(TAG_VENDOR_CHECK, "Failed to choose an EGL config");
             return false;
         }
 
-        int[] contextAttributes = new int[]{
-                EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,  // OpenGL ES 2.0
+        int[] contextAttributes = {
+                EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
                 EGL14.EGL_NONE
         };
 
-        EGLContext context = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, contextAttributes, 0);
+        EGLContext context = EGL14.eglCreateContext(
+                eglDisplay,
+                configs[0],
+                EGL14.EGL_NO_CONTEXT,
+                contextAttributes,
+                0
+        );
+
         if (context == EGL14.EGL_NO_CONTEXT) {
             EGL14.eglTerminate(eglDisplay);
-            Logging.e("CheckVendor", "Failed to create EGL context");
+            Logging.e(TAG_VENDOR_CHECK, "Failed to create EGL context");
             return false;
         }
 
-        if (!EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, context)) {
+        if (!EGL14.eglMakeCurrent(
+                eglDisplay,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                context
+        )) {
             EGL14.eglDestroyContext(eglDisplay, context);
             EGL14.eglTerminate(eglDisplay);
-            Logging.e("CheckVendor", "Failed to make EGL context current");
+            Logging.e(TAG_VENDOR_CHECK, "Failed to make EGL context current");
             return false;
         }
 
         String vendor = GLES20.glGetString(GLES20.GL_VENDOR);
         String renderer = GLES20.glGetString(GLES20.GL_RENDERER);
-        boolean isAdreno = (vendor != null && renderer != null &&
-                vendor.equalsIgnoreCase("Qualcomm") &&
-                renderer.toLowerCase().contains("adreno"));
 
-        // Cleanup
-        EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+        boolean isAdreno =
+                vendor != null
+                        && renderer != null
+                        && "Qualcomm".equalsIgnoreCase(vendor)
+                        && renderer.toLowerCase().contains("adreno");
+
+        EGL14.eglMakeCurrent(
+                eglDisplay,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_CONTEXT
+        );
         EGL14.eglDestroyContext(eglDisplay, context);
         EGL14.eglTerminate(eglDisplay);
 
-        Logging.d("CheckVendor", "Running on Adreno GPU: " + isAdreno);
+        Logging.d(TAG_VENDOR_CHECK, "Running on Adreno GPU: " + isAdreno);
         return isAdreno;
     }
 
     public static synchronized void shareLogs(Context context) {
-        AlertDialog dialog = ZHTools.createTaskRunningDialog(context);
+        AlertDialog dialog = createTaskRunningDialog(context);
 
         Task.runTask(() -> {
                     File zipFile = new File(PathManager.DIR_APP_CACHE, "logs.zip");
@@ -398,64 +410,77 @@ public final class ZHTools {
 
                         File logsFolder = new File(PathManager.DIR_LAUNCHER_LOG);
                         if (logsFolder.exists() && logsFolder.isDirectory()) {
-                            FileTools.zipDirectory(logsFolder, "launcher_logs/", file -> {
-                                String fileName = file.getName();
-                                return fileName.equals("latestcrash.txt") || (fileName.startsWith("log") && fileName.endsWith(".txt"));
-                            }, zos);
-                        } else Log.d("Zip Log", "The launcher log does not exist or is not available");
+                            FileTools.zipDirectory(
+                                    logsFolder,
+                                    "launcher_logs/",
+                                    file -> {
+                                        String fileName = file.getName();
+                                        return fileName.equals("latestcrash.txt")
+                                                || (fileName.startsWith("log") && fileName.endsWith(".txt"));
+                                    },
+                                    zos
+                            );
+                        } else {
+                            Log.d(TAG_ZIP_LOG, "Launcher log folder does not exist or is unavailable");
+                        }
 
                         File latestLogFile = new File(PathManager.DIR_GAME_HOME, "/latestlog.txt");
                         if (latestLogFile.exists() && latestLogFile.isFile()) {
                             FileTools.zipFile(latestLogFile, latestLogFile.getName(), zos);
-                        } else Log.d("Zip Log", "The game run log does not exist");
+                        } else {
+                            Log.d(TAG_ZIP_LOG, "Game log file does not exist");
+                        }
                     }
 
                     return zipFile;
-                }).beforeStart(TaskExecutors.getAndroidUI(), dialog::show)
+                })
+                .beforeStart(TaskExecutors.getAndroidUI(), dialog::show)
                 .ended(TaskExecutors.getAndroidUI(), zipFile -> {
                     if (zipFile != null) {
                         FileTools.shareFile(context, zipFile);
                     }
-                }).onThrowable(t -> Logging.e("Zip Log", Tools.printToString(t)))
+                })
+                .onThrowable(t -> Logging.e(TAG_ZIP_LOG, Tools.printToString(t)))
                 .finallyTask(TaskExecutors.getAndroidUI(), dialog::dismiss)
                 .execute();
     }
 
     public static boolean isDarkMode(Context context) {
         Configuration configuration = context.getResources().getConfiguration();
-        return (configuration.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        return (configuration.uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
     }
 
     public static void getWebViewAfterProcessing(WebView view) {
         view.setWebViewClient(new WebViewClient() {
             @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
+            public void onPageFinished(WebView webView, String url) {
+                super.onPageFinished(webView, url);
 
-                String[] color = new String[2];
-                boolean darkMode = isDarkMode(view.getContext());
-                color[0] = darkMode ? "#333333" : "#CFCFCF";
-                color[1] = darkMode ? "#ffffff" : "#0E0E0E";
+                boolean darkMode = isDarkMode(webView.getContext());
+                String backgroundColor = darkMode ? "#333333" : "#CFCFCF";
+                String textColor = darkMode ? "#ffffff" : "#0E0E0E";
 
-                String css = "body { background-color: " + color[0] + "; color: " + color[1] + "; }" +
-                        "a, a:link, a:visited, a:hover, a:active {" +
-                        "  color: " + color[1] + ";" +
-                        "  text-decoration: none;" +
-                        "  pointer-events: none;" + //禁止链接的交互性
-                        "}";
+                String css = "body { background-color: " + backgroundColor + "; color: " + textColor + "; }"
+                        + "a, a:link, a:visited, a:hover, a:active {"
+                        + "  color: " + textColor + ";"
+                        + "  text-decoration: none;"
+                        + "  pointer-events: none;"
+                        + "}";
 
-                //JavaScript代码，用于将CSS样式添加到WebView中
-                String js = "var parent = document.getElementsByTagName('head').item(0);" +
-                        "var style = document.createElement('style');" +
-                        "style.type = 'text/css';" +
-                        "if (style.styleSheet){" +
-                        "  style.styleSheet.cssText = '" + css.replace("'", "\\'") + "';" +
-                        "} else {" +
-                        "  style.appendChild(document.createTextNode('" + css.replace("'", "\\'") + "'));" +
-                        "}" +
-                        "parent.appendChild(style);";
+                String escapedCss = css.replace("'", "\\'");
+                String js =
+                        "var parent = document.getElementsByTagName('head').item(0);"
+                                + "var style = document.createElement('style');"
+                                + "style.type = 'text/css';"
+                                + "if (style.styleSheet){"
+                                + "  style.styleSheet.cssText = '" + escapedCss + "';"
+                                + "} else {"
+                                + "  style.appendChild(document.createTextNode('" + escapedCss + "'));"
+                                + "}"
+                                + "parent.appendChild(style);";
 
-                view.evaluateJavascript(js, null);
+                webView.evaluateJavascript(js, null);
             }
         });
     }

@@ -35,13 +35,15 @@ class InstallHelper {
                 try {
                     val downloadBuffer = ByteArray(8192)
                     DownloadUtils.ensureSha1<Void?>(targetFile, version.fileHash) {
-                        Logging.i(
-                            "InstallHelper",
-                            "Download Url: ${version.fileUrl}"
-                        )
+                        Logging.i("InstallHelper", "Download Url: ${version.fileUrl}")
                         DownloadUtils.downloadFileMonitored(
-                            version.fileUrl, targetFile, downloadBuffer,
-                            DownloaderProgressWrapper(R.string.download_install_download_file, progressKey)
+                            version.fileUrl,
+                            targetFile,
+                            downloadBuffer,
+                            DownloaderProgressWrapper(
+                                R.string.download_install_download_file,
+                                progressKey
+                            )
                         )
                         null
                     }
@@ -60,18 +62,24 @@ class InstallHelper {
             installFunction: ModPackInstallFunction
         ): ModLoaderWrapper? {
             val modpackFile = File(
-                PathManager.DIR_CACHE, "$customName.cf"
-            ) // Cache File
+                PathManager.DIR_CACHE,
+                "$customName.cf"
+            ) // Temporary cached modpack file
 
+            val targetVersionPath = VersionsManager.getVersionPath(customName)
             val modLoaderInfo: ModLoaderWrapper?
+
             try {
                 val downloadBuffer = ByteArray(8192)
                 DownloadUtils.ensureSha1<Void?>(
-                    modpackFile, version.fileHash
+                    modpackFile,
+                    version.fileHash
                 ) {
                     Logging.i("InstallHelper", "Download Url: ${version.fileUrl}")
                     DownloadUtils.downloadFileMonitored(
-                        version.fileUrl, modpackFile, downloadBuffer,
+                        version.fileUrl,
+                        modpackFile,
+                        downloadBuffer,
                         DownloaderProgressWrapper(
                             R.string.modpack_download_downloading_metadata,
                             ProgressLayout.INSTALL_RESOURCE
@@ -80,15 +88,27 @@ class InstallHelper {
                     null
                 }
 
-                // Install the modpack
-                modLoaderInfo = installFunction.install(modpackFile, VersionsManager.getVersionPath(customName))
+                // Install the modpack into the selected version directory.
+                modLoaderInfo = installFunction.install(modpackFile, targetVersionPath)
+
+                // Make the installed modpack the current version and refresh the in-memory
+                // version list immediately so the UI updates without needing a manual refresh.
+                VersionsManager.saveCurrentVersion(customName)
+                VersionsManager.refresh("InstallHelper:installModPack", true)
             } finally {
                 FileUtils.deleteQuietly(modpackFile)
                 ProgressLayout.clearProgress(ProgressLayout.INSTALL_RESOURCE)
             }
-            modLoaderInfo ?: return null
-            Logging.i("InstallHelper", "ModLoader is ${modLoaderInfo.nameById}")
 
+            if (modLoaderInfo == null) {
+                Logging.i(
+                    "InstallHelper",
+                    "Modpack installed with no additional ModLoader step required for version $customName"
+                )
+                return null
+            }
+
+            Logging.i("InstallHelper", "ModLoader is ${modLoaderInfo.nameById}")
             return modLoaderInfo
         }
     }

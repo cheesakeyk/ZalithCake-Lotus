@@ -22,6 +22,7 @@ class GameInstaller(
     private val realVersion: String = installEvent.minecraftVersion
     private val customVersionName: String = installEvent.customVersionName
     private val taskMap: Map<Addon, InstallTaskItem> = installEvent.taskMap
+
     private val targetVersionFolder = VersionsManager.getVersionPath(customVersionName)
     private val vanillaVersionFolder = VersionsManager.getVersionPath(realVersion)
 
@@ -29,7 +30,14 @@ class GameInstaller(
         Logging.i("Minecraft Downloader", "Start downloading the version: $realVersion")
 
         if (taskMap.isNotEmpty()) {
-            ProgressKeeper.submitProgress(ProgressLayout.INSTALL_RESOURCE, 0, R.string.download_install_download_file, 0, 0, 0)
+            ProgressKeeper.submitProgress(
+                ProgressLayout.INSTALL_RESOURCE,
+                0,
+                R.string.download_install_download_file,
+                0,
+                0,
+                0
+            )
         }
 
         val mcVersion = AsyncMinecraftDownloader.getListedVersion(realVersion)
@@ -40,52 +48,77 @@ class GameInstaller(
                 override fun onDownloadDone() {
                     Task.runTask {
                         if (taskMap.isEmpty()) {
-                            //如果附加附件是空的，则表明只需要安装原版，需要确保这个自定义的版本文件夹内必定有原版的.json文件
-                            //需要检查是否自定义了版本名，如果真实版本与自定义用户名相同，则表示用户并没有修改版本名，当前安装的就是纯原版
-                            //如果没有自定义用户名，则不复制版本文件，毕竟原版文件，与目标文件现在是同一个文件！
+                            // Vanilla-only install.
+                            // If the user chose a custom instance name, copy the downloaded vanilla JSON
+                            // into the custom version folder so the custom instance becomes a valid version.
                             if (realVersion != customVersionName && VersionsManager.isVersionExists(realVersion)) {
-                                //找到原版的.json文件，在MinecraftDownloader开始时，已经下载了
-                                val vanillaJsonFile = File(vanillaVersionFolder, "${vanillaVersionFolder.name}.json")
+                                val vanillaJsonFile =
+                                    File(vanillaVersionFolder, "${vanillaVersionFolder.name}.json")
                                 if (vanillaJsonFile.exists() && vanillaJsonFile.isFile) {
-                                    //如果原版的.json文件存在，则直接复制过来用
-                                    FileUtils.copyFile(vanillaJsonFile, File(targetVersionFolder, "$customVersionName.json"))
+                                    FileUtils.copyFile(
+                                        vanillaJsonFile,
+                                        File(targetVersionFolder, "$customVersionName.json")
+                                    )
                                 }
                             }
-                            //ModLoader任务为空，接下来的无意义ModLoader任务将彻底跳过！
+
+                            // Vanilla finishes here, so this instance can be selected immediately.
+                            VersionsManager.setCurrentVersionAndRefresh(
+                                customVersionName,
+                                "GameInstaller:vanillaInstallComplete",
+                                true
+                            )
                             return@runTask null
                         }
 
-                        //将Mod与Modloader的任务分离出来，应该先安装Mod
-                        val modTask: MutableList<InstallTaskItem> = ArrayList()
-                        val modloaderTask = AtomicReference<Pair<Addon, InstallTaskItem>>() //暂时只允许同时安装一个ModLoader
+                        // Separate mod tasks from the ModLoader task.
+                        // Only one ModLoader task is expected at a time.
+                        val modTasks: MutableList<InstallTaskItem> = ArrayList()
+                        val modLoaderTask = AtomicReference<Pair<Addon, InstallTaskItem>>()
+
                         taskMap.forEach { (addon, taskItem) ->
-                            if (taskItem.isMod) modTask.add(taskItem)
-                            else modloaderTask.set(Pair(addon, taskItem))
+                            if (taskItem.isMod) {
+                                modTasks.add(taskItem)
+                            } else {
+                                modLoaderTask.set(Pair(addon, taskItem))
+                            }
                         }
 
-                        //下载Mod文件
-                        modTask.forEach { task ->
+                        // Install mods first.
+                        modTasks.forEach { task ->
                             Logging.i("Install Version", "Installing Mod: ${task.selectedVersion}")
                             val file = task.task.run(customVersionName)
                             val endTask = task.endTask
                             file?.let { endTask?.endTask(activity, it) }
                         }
 
-                        modloaderTask.get()?.let { taskPair ->
-                            ProgressKeeper.submitProgress(ProgressLayout.INSTALL_RESOURCE, 0, R.string.mod_download_progress, taskPair.first.addonName)
+                        // Then prepare/install the selected ModLoader.
+                        modLoaderTask.get()?.let { taskPair ->
+                            ProgressKeeper.submitProgress(
+                                ProgressLayout.INSTALL_RESOURCE,
+                                0,
+                                R.string.mod_download_progress,
+                                taskPair.first.addonName
+                            )
 
-                            Logging.i("Install Version", "Installing ModLoader: ${taskPair.second.selectedVersion}")
+                            Logging.i(
+                                "Install Version",
+                                "Installing ModLoader: ${taskPair.second.selectedVersion}"
+                            )
                             val file = taskPair.second.task.run(customVersionName)
                             return@runTask Pair(file, taskPair.second)
                         }
 
                         null
-                    }.ended ended@{ taskPair ->
+                    }.ended { taskPair ->
                         taskPair?.let { pair ->
                             pair.first?.let {
                                 pair.second.endTask?.endTask(activity, it)
                             }
                         }
+                        // Do not select the version here for ModLoader installs.
+                        // Fabric/Forge/NeoForge/Quilt complete later in JavaGUILauncherActivity,
+                        // and VersionsManager pending selection will handle that flow.
                     }.onThrowable { e ->
                         Tools.showErrorRemote(e)
                     }.execute()

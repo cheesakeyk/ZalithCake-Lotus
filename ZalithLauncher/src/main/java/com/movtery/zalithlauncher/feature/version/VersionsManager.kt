@@ -28,52 +28,49 @@ import org.greenrobot.eventbus.EventBus
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
-/**
- * 所有版本管理者
- * @see Version
- */
 object VersionsManager {
     private val versions = CopyOnWriteArrayList<Version>()
 
-    /**
-     * @return 获取当前的游戏信息
-     */
     lateinit var currentGameInfo: CurrentGameInfo
         private set
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + CoroutineName("VersionsManager"))
     private val refreshMutex = Mutex()
+
     private var isRefreshing: Boolean = false
-    private var lastRefreshTime = 0L
+    private var lastRefreshTime: Long = 0L
 
-    /**
-     * @return 检查是否可以刷新
-     */
+    @Volatile
+    private var pendingSelectedVersionName: String? = null
+
     @JvmStatic
-    fun canRefresh() = !isRefreshing && ZHTools.getCurrentTimeMillis() - lastRefreshTime > 500
-
-    /**
-     * @return 全部的版本数据
-     */
-    fun getVersions() = versions.toList()
-
-    /**
-     * 检查版本是否已经存在
-     */
-    fun isVersionExists(versionName: String, checkJson: Boolean = false): Boolean {
-        val folder = File(ProfilePathHome.getVersionsHome(), versionName)
-        //保证版本文件夹存在的同时，也应保证其版本json文件存在
-        return if (checkJson) File(folder, "${folder.name}.json").exists()
-        else folder.exists()
+    fun canRefresh(): Boolean {
+        return !isRefreshing && ZHTools.getCurrentTimeMillis() - lastRefreshTime > 500
     }
 
-    /**
-     * 异步刷新当前的版本列表，刷新完成后，将使用一个事件进行通知，不过这个事件并不会在UI线程执行
-     * @param tag 标记是谁发起了版本刷新任务，方便debug
-     * @see com.movtery.zalithlauncher.event.single.RefreshVersionsEvent
-     */
+    fun getVersions(): List<Version> = versions.toList()
+
+    fun isVersionExists(versionName: String, checkJson: Boolean = false): Boolean {
+        val folder = File(ProfilePathHome.getVersionsHome(), versionName)
+        return if (checkJson) {
+            File(folder, "${folder.name}.json").exists()
+        } else {
+            folder.exists()
+        }
+    }
+
+    fun setPendingSelectedVersion(versionName: String?) {
+        pendingSelectedVersionName = versionName?.takeIf { it.isNotBlank() }
+        Logging.i("VersionsManager", "Pending selected version set to: $pendingSelectedVersionName")
+    }
+
+    fun clearPendingSelectedVersion() {
+        pendingSelectedVersionName = null
+    }
+
     fun refresh(tag: String, refreshVersionInfo: Boolean = false) {
-        Logging.i("VersionsManager", "$tag initiated the refresh version task")
+        Logging.i("VersionsManager", "$tag initiated a version refresh task")
+
         coroutineScope.launch {
             refreshMutex.withLock {
                 lastRefreshTime = ZHTools.getCurrentTimeMillis()
@@ -86,132 +83,180 @@ object VersionsManager {
         isRefreshing = true
         EventBus.getDefault().post(RefreshVersionsEvent(START))
 
-        versions.clear()
+        try {
+            versions.clear()
 
-        val versionsHome: String = ProfilePathHome.getVersionsHome()
-        File(versionsHome).listFiles()?.forEach { versionFile ->
-            runCatching {
-                processVersionFile(versionsHome, versionFile, refreshVersionInfo)
-            }
-        }
-
-        versions.sortWith { o1, o2 ->
-            var sort = -SortStrings.compareClassVersions(
-                o1.getVersionInfo()?.minecraftVersion ?: o1.getVersionName(),
-                o2.getVersionInfo()?.minecraftVersion ?: o2.getVersionName()
-            )
-            if (sort == 0) sort = SortStrings.compareChar(o1.getVersionName(), o2.getVersionName())
-            sort
-        }
-
-        currentGameInfo = CurrentGameInfo.refreshCurrentInfo()
-
-        //使用事件通知版本已刷新
-        EventBus.getDefault().post(RefreshVersionsEvent(END))
-        isRefreshing = false
-    }
-
-    private fun processVersionFile(versionsHome: String, versionFile: File, refreshVersionInfo: Boolean) {
-        if (versionFile.exists() && versionFile.isDirectory) {
-            var isVersion = false
-
-            //通过判断是否存在版本的.json文件，来确定其是否为一个版本
-            val jsonFile = File(versionFile, "${versionFile.name}.json")
-            if (jsonFile.exists() && jsonFile.isFile) {
-                isVersion = true
-                val versionInfoFile = File(getZalithVersionPath(versionFile), "VersionInfo.json")
-                if (refreshVersionInfo) FileUtils.deleteQuietly(versionInfoFile)
-                if (!versionInfoFile.exists()) {
-                    VersionInfoUtils.parseJson(jsonFile)?.save(versionFile)
+            val versionsHome = ProfilePathHome.getVersionsHome()
+            File(versionsHome).listFiles()?.forEach { versionFile ->
+                runCatching {
+                    processVersionFile(versionsHome, versionFile, refreshVersionInfo)
+                }.onFailure { throwable ->
+                    Logging.e(
+                        "VersionsManager",
+                        "Failed to process version folder: ${versionFile.absolutePath}",
+                        throwable
+                    )
                 }
             }
 
-            val versionConfig = VersionConfig.parseConfig(versionFile)
+            versions.sortWith { first, second ->
+                var result = -SortStrings.compareClassVersions(
+                    first.getVersionInfo()?.minecraftVersion ?: first.getVersionName(),
+                    second.getVersionInfo()?.minecraftVersion ?: second.getVersionName()
+                )
 
-            val version = Version(
-                versionsHome,
-                versionFile.absolutePath,
-                versionConfig,
-                isVersion
-            )
-            versions.add(version)
+                if (result == 0) {
+                    result = SortStrings.compareChar(
+                        first.getVersionName(),
+                        second.getVersionName()
+                    )
+                }
 
-            Logging.i("VersionsManager", "Identified and added version: ${version.getVersionName()}, " +
-                    "Path: (${version.getVersionPath()}), " +
-                    "Info: ${version.getVersionInfo()?.getInfoString()}")
+                result
+            }
+
+            currentGameInfo = CurrentGameInfo.refreshCurrentInfo()
+            applyPendingSelectionIfAvailable()
+
+            EventBus.getDefault().post(RefreshVersionsEvent(END))
+        } finally {
+            isRefreshing = false
         }
     }
 
-    /**
-     * @return 获取当前的版本
-     */
-    fun getCurrentVersion(): Version? {
-        if (versions.isEmpty()) return null
+    private fun applyPendingSelectionIfAvailable() {
+        val pendingName = pendingSelectedVersionName ?: return
+        val pendingVersion = getVersion(pendingName)
 
-        fun returnVersionByFirst(): Version? {
+        if (pendingVersion != null) {
+            Logging.i("VersionsManager", "Applying pending selected version: $pendingName")
+            saveCurrentVersion(pendingName)
+            pendingSelectedVersionName = null
+        } else {
+            Logging.i("VersionsManager", "Pending selected version not found yet: $pendingName")
+        }
+    }
+
+    private fun processVersionFile(
+        versionsHome: String,
+        versionFile: File,
+        refreshVersionInfo: Boolean
+    ) {
+        if (!versionFile.exists() || !versionFile.isDirectory) {
+            return
+        }
+
+        var isVersion = false
+        val jsonFile = File(versionFile, "${versionFile.name}.json")
+
+        if (jsonFile.exists() && jsonFile.isFile) {
+            isVersion = true
+
+            val versionInfoFile = File(getZalithVersionPath(versionFile), "VersionInfo.json")
+            if (refreshVersionInfo) {
+                FileUtils.deleteQuietly(versionInfoFile)
+            }
+            if (!versionInfoFile.exists()) {
+                VersionInfoUtils.parseJson(jsonFile)?.save(versionFile)
+            }
+        }
+
+        val versionConfig = VersionConfig.parseConfig(versionFile)
+        val version = Version(
+            versionsHome,
+            versionFile.absolutePath,
+            versionConfig,
+            isVersion
+        )
+
+        versions.add(version)
+
+        Logging.i(
+            "VersionsManager",
+            "Identified and added version: ${version.getVersionName()}, " +
+                    "Path: (${version.getVersionPath()}), " +
+                    "Info: ${version.getVersionInfo()?.getInfoString()}"
+        )
+    }
+
+    fun getCurrentVersion(): Version? {
+        if (versions.isEmpty()) {
+            return null
+        }
+
+        applyPendingSelectionIfAvailable()
+
+        fun getFirstValidVersion(): Version? {
             return versions.find { it.isValid() }?.apply {
-                //确保版本有效
                 saveCurrentVersion(getVersionName())
             }
         }
 
         return runCatching {
-            val versionString = currentGameInfo.version
-            getVersion(versionString) ?: run {
-                return returnVersionByFirst()
+            val versionName = currentGameInfo.version
+            getVersion(versionName) ?: run {
+                Logging.i("VersionsManager", "Saved current version not found: $versionName")
+                getFirstValidVersion()
             }
-        }.getOrElse { e ->
-            Logging.e("Get Current Version", Tools.printToString(e))
-            returnVersionByFirst()
+        }.getOrElse { throwable ->
+            Logging.e("Get Current Version", Tools.printToString(throwable))
+            getFirstValidVersion()
         }
     }
 
-    /**
-     * @return 通过版本名，判断其版本是否存在
-     */
-    fun checkVersionExistsByName(versionName: String?) =
-        versionName?.let { name -> versions.any { it.getVersionName() == name } } ?: false
+    fun checkVersionExistsByName(versionName: String?): Boolean {
+        return versionName?.let { name ->
+            versions.any { it.getVersionName() == name }
+        } ?: false
+    }
 
-    /**
-     * @return 获取 Zalith 启动器版本标识文件夹
-     */
-    fun getZalithVersionPath(version: Version) = File(version.getVersionPath(), InfoDistributor.LAUNCHER_NAME)
+    fun getZalithVersionPath(version: Version): File {
+        return File(version.getVersionPath(), InfoDistributor.LAUNCHER_NAME)
+    }
 
-    /**
-     * @return 通过目录获取 Zalith 启动器版本标识文件夹
-     */
-    fun getZalithVersionPath(folder: File) = File(folder, InfoDistributor.LAUNCHER_NAME)
+    fun getZalithVersionPath(folder: File): File {
+        return File(folder, InfoDistributor.LAUNCHER_NAME)
+    }
 
-    /**
-     * @return 通过名称获取 Zalith 启动器版本标识文件夹
-     */
-    fun getZalithVersionPath(name: String) = File(getVersionPath(name), InfoDistributor.LAUNCHER_NAME)
+    fun getZalithVersionPath(name: String): File {
+        return File(getVersionPath(name), InfoDistributor.LAUNCHER_NAME)
+    }
 
-    /**
-     * @return 获取当前版本设置的图标
-     */
-    fun getVersionIconFile(version: Version) = File(getZalithVersionPath(version), "VersionIcon.png")
+    fun getVersionIconFile(version: Version): File {
+        return File(getZalithVersionPath(version), "VersionIcon.png")
+    }
 
-    /**
-     * @return 通过名称获取当前版本设置的图标
-     */
-    fun getVersionIconFile(name: String) = File(getZalithVersionPath(name), "VersionIcon.png")
+    fun getVersionIconFile(name: String): File {
+        return File(getZalithVersionPath(name), "VersionIcon.png")
+    }
 
-    /**
-     * @return 通过名称获取版本的文件夹路径
-     */
-    fun getVersionPath(name: String) = File(ProfilePathHome.getVersionsHome(), name)
+    fun getVersionPath(name: String): File {
+        return File(ProfilePathHome.getVersionsHome(), name)
+    }
 
-    /**
-     * 保存当前选择的版本
-     */
     fun saveCurrentVersion(versionName: String) {
         runCatching {
+            if (!::currentGameInfo.isInitialized) {
+                currentGameInfo = CurrentGameInfo.refreshCurrentInfo()
+            }
+
             currentGameInfo.apply {
                 version = versionName
                 saveCurrentInfo()
             }
-        }.onFailure { e -> Logging.e("Save Current Version", Tools.printToString(e)) }
+        }.onFailure { throwable ->
+            Logging.e("Save Current Version", Tools.printToString(throwable))
+        }
+    }
+
+    fun setCurrentVersionAndRefresh(
+        versionName: String,
+        tag: String,
+        refreshVersionInfo: Boolean = false
+    ) {
+        clearPendingSelectedVersion()
+        saveCurrentVersion(versionName)
+        refresh(tag, refreshVersionInfo)
     }
 
     private fun validateVersionName(
@@ -220,90 +265,87 @@ object VersionsManager {
         versionInfo: VersionInfo?
     ): String? {
         return when {
-            isVersionExists(newName, true) ->
+            isVersionExists(newName, true) -> {
                 context.getString(R.string.version_install_exists)
+            }
+
             versionInfo?.loaderInfo?.takeIf { it.isNotEmpty() }?.let {
-                //如果这个版本是有ModLoader加载器信息的，则不允许修改为与原版名称一致的名称，防止冲突
                 newName == versionInfo.minecraftVersion
-            } ?: false ->
+            } ?: false -> {
                 context.getString(R.string.version_install_cannot_use_mc_name)
+            }
+
             else -> null
         }
     }
 
-    /**
-     * 打开重命名版本的弹窗，需要确保在UI线程运行
-     * @param beforeRename 在重命名前一步的操作
-     */
-    fun openRenameDialog(context: Context, version: Version, beforeRename: (() -> Unit)? = null) {
+    fun openRenameDialog(
+        context: Context,
+        version: Version,
+        beforeRename: (() -> Unit)? = null
+    ) {
         EditTextDialog.Builder(context)
             .setTitle(R.string.version_manager_rename)
             .setEditText(version.getVersionName())
             .setAsRequired()
             .setConfirmListener { editText, _ ->
-                val string = editText.text.toString()
+                val newName = editText.text.toString()
 
-                //与原始名称一致
-                if (string == version.getVersionName()) return@setConfirmListener true
+                if (newName == version.getVersionName()) {
+                    return@setConfirmListener true
+                }
 
                 if (FileTools.isFilenameInvalid(editText)) {
                     return@setConfirmListener false
                 }
 
-                val error = validateVersionName(context, string, version.getVersionInfo())
-                error?.let {
-                    editText.error = it
+                val error = validateVersionName(context, newName, version.getVersionInfo())
+                if (error != null) {
+                    editText.error = error
                     return@setConfirmListener false
                 }
 
                 beforeRename?.invoke()
-                renameVersion(version, string)
-
+                renameVersion(version, newName)
                 true
-            }.showDialog()
+            }
+            .showDialog()
     }
 
-    /**
-     * 重命名当前版本，但并不会在这里对即将重命名的名称，进行非法性判断
-     */
     private fun renameVersion(version: Version, name: String) {
         val currentVersionName = getCurrentVersion()?.getVersionName()
-        //如果当前的版本是即将被重命名的版本，那么就把将要重命名的名字设置为当前版本
-        if (version.getVersionName() == currentVersionName) saveCurrentVersion(name)
 
-        //尝试刷新收藏夹内的版本名称
+        if (version.getVersionName() == currentVersionName) {
+            saveCurrentVersion(name)
+        }
+
         FavoritesVersionUtils.renameVersion(version.getVersionName(), name)
 
         val versionFolder = version.getVersionPath()
-        val renameFolder = File(ProfilePathHome.getVersionsHome(), name)
+        val renamedFolder = File(ProfilePathHome.getVersionsHome(), name)
 
-        //不管重命名之后的文件夹是什么，只要这个文件夹存在，那么就必须删除
-        //否则将出现问题
-        FileUtils.deleteQuietly(renameFolder)
+        FileUtils.deleteQuietly(renamedFolder)
 
         val originalName = versionFolder.name
 
-        FileTools.renameFile(versionFolder, renameFolder)
+        FileTools.renameFile(versionFolder, renamedFolder)
 
-        val versionJsonFile = File(renameFolder, "$originalName.json")
-        val versionJarFile = File(renameFolder, "$originalName.jar")
-        val renameJsonFile = File(renameFolder, "$name.json")
-        val renameJarFile = File(renameFolder, "$name.jar")
+        val originalJsonFile = File(renamedFolder, "$originalName.json")
+        val originalJarFile = File(renamedFolder, "$originalName.jar")
+        val renamedJsonFile = File(renamedFolder, "$name.json")
+        val renamedJarFile = File(renamedFolder, "$name.jar")
 
-        FileTools.renameFile(versionJsonFile, renameJsonFile)
-        FileTools.renameFile(versionJarFile, renameJarFile)
+        FileTools.renameFile(originalJsonFile, renamedJsonFile)
+        FileTools.renameFile(originalJarFile, renamedJarFile)
 
         FileUtils.deleteQuietly(versionFolder)
 
-        //重命名后，需要刷新列表
         refresh("VersionsManager:renameVersion")
     }
 
-    /**
-     * 打开复制版本的名称输入框，将选中的版本复制为一个新的版本
-     */
     fun openCopyDialog(context: Context, version: Version) {
         val dialog = ZHTools.createTaskRunningDialog(context)
+
         EditTextDialog.Builder(context)
             .setTitle(R.string.version_manager_copy)
             .setMessage(R.string.version_manager_copy_tip)
@@ -312,83 +354,82 @@ object VersionsManager {
             .setEditText(version.getVersionName())
             .setAsRequired()
             .setConfirmListener { editText, checked ->
-                val string = editText.text.toString()
+                val newName = editText.text.toString()
 
-                //与原始名称一致
-                if (string == version.getVersionName()) return@setConfirmListener true
+                if (newName == version.getVersionName()) {
+                    return@setConfirmListener true
+                }
 
                 if (FileTools.isFilenameInvalid(editText)) {
                     return@setConfirmListener false
                 }
 
-                val error = validateVersionName(context, string, version.getVersionInfo())
-                error?.let {
-                    editText.error = it
+                val error = validateVersionName(context, newName, version.getVersionInfo())
+                if (error != null) {
+                    editText.error = error
                     return@setConfirmListener false
                 }
 
                 Task.runTask {
-                    copyVersion(version, string, checked)
+                    copyVersion(version, newName, checked)
                 }.beforeStart(TaskExecutors.getAndroidUI()) {
                     dialog.show()
-                }.onThrowable { e ->
-                    Tools.showErrorRemote(e)
+                }.onThrowable { throwable ->
+                    Tools.showErrorRemote(throwable)
                 }.finallyTask(TaskExecutors.getAndroidUI()) {
                     dialog.dismiss()
-                    refresh("VersionsManager:openCopyDialog")
+                    setCurrentVersionAndRefresh(newName, "VersionsManager:openCopyDialog")
                 }.execute()
+
                 true
-            }.showDialog()
+            }
+            .showDialog()
     }
 
-    /**
-     * 将选中的版本复制为一个新的版本
-     * @param version 选中的版本
-     * @param name 新的版本的名称
-     * @param copyAllFile 是否复制全部文件
-     */
     private fun copyVersion(version: Version, name: String, copyAllFile: Boolean) {
         val versionsFolder = version.getVersionsFolder()
-        val newVersion = File(versionsFolder, name)
-
+        val newVersionFolder = File(versionsFolder, name)
         val originalName = version.getVersionName()
 
-        //新版本的json与jar文件
-        val newJsonFile = File(newVersion, "$name.json")
-        val newJarFile = File(newVersion, "$name.jar")
-
+        val newJsonFile = File(newVersionFolder, "$name.json")
+        val newJarFile = File(newVersionFolder, "$name.jar")
         val originalVersionFolder = version.getVersionPath()
+
         if (copyAllFile) {
-            //启用复制所有文件时，直接将原文件夹整体复制到新版本
-            FileUtils.copyDirectory(originalVersionFolder, newVersion)
-            //重命名json、jar文件
-            val jsonFile = File(newVersion, "$originalName.json")
-            val jarFile = File(newVersion, "$originalName.jar")
-            if (jsonFile.exists()) jsonFile.renameTo(newJsonFile)
-            if (jarFile.exists()) jarFile.renameTo(newJarFile)
+            FileUtils.copyDirectory(originalVersionFolder, newVersionFolder)
+
+            val copiedJsonFile = File(newVersionFolder, "$originalName.json")
+            val copiedJarFile = File(newVersionFolder, "$originalName.jar")
+            if (copiedJsonFile.exists()) {
+                copiedJsonFile.renameTo(newJsonFile)
+            }
+            if (copiedJarFile.exists()) {
+                copiedJarFile.renameTo(newJarFile)
+            }
         } else {
-            //不复制所有文件时，仅复制并重命名json、jar文件
             val originalJsonFile = File(originalVersionFolder, "$originalName.json")
             val originalJarFile = File(originalVersionFolder, "$originalName.jar")
-            newVersion.mkdirs()
-            // versions/1.21.3/1.21.3.json -> versions/name/name.json
-            if (originalJsonFile.exists()) originalJsonFile.copyTo(newJsonFile)
-            // versions/1.21.3/1.21.3.jar -> versions/name/name.jar
-            if (originalJarFile.exists()) originalJarFile.copyTo(newJarFile)
+
+            newVersionFolder.mkdirs()
+
+            if (originalJsonFile.exists()) {
+                originalJsonFile.copyTo(newJsonFile)
+            }
+            if (originalJarFile.exists()) {
+                originalJarFile.copyTo(newJarFile)
+            }
         }
 
-        //保存版本配置文件
         version.getVersionConfig().copy().let { config ->
-            config.setVersionPath(newVersion)
+            config.setVersionPath(newVersionFolder)
             config.setIsolationType(VersionConfig.IsolationType.ENABLE)
             config.saveWithThrowable()
         }
     }
 
     private fun getVersion(name: String?): Version? {
-        name?.let { versionName ->
-            return versions.find { it.getVersionName() == versionName }?.takeIf { it.isValid() }
+        return name?.let { versionName ->
+            versions.find { it.getVersionName() == versionName }?.takeIf { it.isValid() }
         }
-        return null
     }
 }

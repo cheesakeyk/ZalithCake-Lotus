@@ -19,8 +19,8 @@ import com.movtery.zalithlauncher.databinding.ItemVersionBinding
 import com.movtery.zalithlauncher.databinding.ViewVersionManagerBinding
 import com.movtery.zalithlauncher.feature.customprofilepath.ProfilePathManager
 import com.movtery.zalithlauncher.feature.version.Version
-import com.movtery.zalithlauncher.feature.version.utils.VersionIconUtils
 import com.movtery.zalithlauncher.feature.version.VersionsManager
+import com.movtery.zalithlauncher.feature.version.utils.VersionIconUtils
 import com.movtery.zalithlauncher.task.Task
 import com.movtery.zalithlauncher.ui.dialog.TipDialog
 import com.movtery.zalithlauncher.ui.fragment.FilesFragment
@@ -32,11 +32,17 @@ class VersionAdapter(
     private val parentFragment: Fragment,
     private val listener: OnVersionItemClickListener
 ) : RecyclerView.Adapter<VersionAdapter.ViewHolder>() {
+
     private val versions: MutableList<Version> = ArrayList()
-    //所有的RadioButton的List，其记录了当前所代表的版本路径
+
+    /**
+     * List of all RadioButtons, each tagged with the version path it represents.
+     */
     private val radioButtonList: MutableList<RadioButton> = mutableListOf()
+
     private var currentVersion: String? = null
-    private var managerPopupWindow: PopupWindow = PopupWindow().apply {
+
+    private val managerPopupWindow: PopupWindow = PopupWindow().apply {
         isFocusable = true
         isOutsideTouchable = true
     }
@@ -45,15 +51,20 @@ class VersionAdapter(
     fun refreshVersions(versions: List<Version>): Int {
         this.versions.clear()
         this.versions.addAll(versions)
-        this.radioButtonList.apply {
+
+        radioButtonList.apply {
             forEach { radioButton -> radioButton.isChecked = false }
             clear()
         }
-        currentVersion = VersionsManager.getCurrentVersion()?.getVersionPath()?.absolutePath
-        //查找当前版本的索引
-        val currentIndex = versions.indexOfFirst { it.getVersionPath().absolutePath == currentVersion }
-        notifyDataSetChanged()
 
+        currentVersion = resolveCurrentVersionPath(versions)
+
+        // Find the index of the selected version.
+        val currentIndex = versions.indexOfFirst {
+            it.getVersionPath().absolutePath == currentVersion
+        }
+
+        notifyDataSetChanged()
         return currentIndex
     }
 
@@ -61,18 +72,44 @@ class VersionAdapter(
         managerPopupWindow.dismiss()
     }
 
+    private fun resolveCurrentVersionPath(versions: List<Version>): String? {
+        val savedCurrentVersionPath = VersionsManager
+            .getCurrentVersion()
+            ?.getVersionPath()
+            ?.absolutePath
+
+        if (savedCurrentVersionPath != null &&
+            versions.any { it.getVersionPath().absolutePath == savedCurrentVersionPath }
+        ) {
+            return savedCurrentVersionPath
+        }
+
+        // If the saved current version is missing, automatically select the first valid version.
+        // Since the version list is already sorted by VersionsManager, this makes the newest valid
+        // version become the active one.
+        val fallbackVersion = versions.firstOrNull { it.isValid() } ?: return null
+        VersionsManager.saveCurrentVersion(fallbackVersion.getVersionName())
+        return fallbackVersion.getVersionPath().absolutePath
+    }
+
     private fun setCurrentVersion(context: Context, version: Version) {
         if (version.isValid()) {
             VersionsManager.saveCurrentVersion(version.getVersionName())
             currentVersion = version.getVersionPath().absolutePath
         } else {
-            //版本无效时，不能设置版本，默认点击就会提示用户删除
+            // Invalid versions cannot be selected. Clicking them will prompt the user to delete them.
             deleteVersion(version, context.getString(R.string.version_manager_delete_tip_invalid))
         }
-        radioButtonList.forEach { radioButton -> radioButton.isChecked = radioButton.tag.toString() == currentVersion }
+
+        radioButtonList.forEach { radioButton ->
+            radioButton.isChecked = radioButton.tag.toString() == currentVersion
+        }
     }
 
-    //删除版本前提示用户，如果版本无效，那么默认点击事件就是删除版本
+    /**
+     * Ask for confirmation before deleting a version.
+     * If the version is invalid, clicking it defaults to deletion.
+     */
     private fun deleteVersion(version: Version, deleteMessage: String) {
         val context = parentFragment.requireActivity()
 
@@ -89,11 +126,14 @@ class VersionAdapter(
                         VersionsManager.refresh("VersionAdapter:deleteVersion")
                     }
                 ).start()
-            }.showDialog()
+            }
+            .showDialog()
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        return ViewHolder(ItemVersionBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+        return ViewHolder(
+            ItemVersionBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+        )
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
@@ -108,11 +148,11 @@ class VersionAdapter(
     override fun getItemCount(): Int = versions.size
 
     inner class ViewHolder(val binding: ItemVersionBinding) : RecyclerView.ViewHolder(binding.root) {
-        private val mContext = binding.root.context
+        private val context = binding.root.context
 
         private fun String.addInfoIfNotBlank(setRed: Boolean = false) {
-            takeIf { it.isNotBlank() }?.let { string ->
-                binding.versionInfoLayout.addView(getInfoTextView(string, setRed))
+            takeIf { it.isNotBlank() }?.let { text ->
+                binding.versionInfoLayout.addView(createInfoTextView(text, setRed))
             }
         }
 
@@ -132,111 +172,128 @@ class VersionAdapter(
                 versionName.text = version.getVersionName()
 
                 if (!version.isValid()) {
-                    mContext.getString(R.string.version_manager_invalid).addInfoIfNotBlank(true)
+                    context.getString(R.string.version_manager_invalid).addInfoIfNotBlank(true)
                 }
 
                 if (version.getVersionConfig().isIsolation()) {
-                    mContext.getString(R.string.pedit_isolation_enabled).addInfoIfNotBlank()
+                    context.getString(R.string.pedit_isolation_enabled).addInfoIfNotBlank()
                 }
 
                 version.getVersionInfo()?.let { versionInfo ->
-                    versionInfoLayout.addView(getInfoTextView(versionInfo.minecraftVersion))
+                    versionInfoLayout.addView(createInfoTextView(versionInfo.minecraftVersion))
                     versionInfo.loaderInfo?.forEach { loaderInfo ->
                         loaderInfo.name.addInfoIfNotBlank()
                         loaderInfo.version.addInfoIfNotBlank()
                     }
                 }
 
-                favorite.setOnClickListener { _ ->
+                favorite.setOnClickListener {
                     listener.showFavoritesDialog(version.getVersionName())
                 }
                 favorite.setImageDrawable(
-                    ContextCompat.getDrawable(mContext,
-                        if (listener.isVersionFavorited(version.getVersionName())) R.drawable.ic_favorite
-                        else R.drawable.ic_favorite_border
+                    ContextCompat.getDrawable(
+                        context,
+                        if (listener.isVersionFavorited(version.getVersionName())) {
+                            R.drawable.ic_favorite
+                        } else {
+                            R.drawable.ic_favorite_border
+                        }
                     )
                 )
 
-                operate.setOnClickListener { _ ->
+                operate.setOnClickListener {
                     showPopupWindow(operate, version)
                 }
 
                 VersionIconUtils(version).start(versionIcon)
 
-                val onClickListener = View.OnClickListener { _ ->
-                    setCurrentVersion(mContext, version)
+                val onClickListener = View.OnClickListener {
+                    setCurrentVersion(context, version)
                 }
                 radioButton.setOnClickListener(onClickListener)
                 root.setOnClickListener(onClickListener)
             }
         }
 
-        private fun getInfoTextView(string: String, setRed: Boolean = false): TextView {
-            val textView = TextView(mContext)
-            textView.text = string
+        private fun createInfoTextView(text: String, setRed: Boolean = false): TextView {
+            val textView = TextView(context)
+            textView.text = text
+
             val layoutParams = FlexboxLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
             layoutParams.setMargins(0, 0, Tools.dpToPx(8f).toInt(), 0)
             textView.layoutParams = layoutParams
-            if (setRed) textView.setTextColor(Color.RED)
+
+            if (setRed) {
+                textView.setTextColor(Color.RED)
+            }
+
             return textView
         }
 
-        private fun showPopupWindow(
-            anchorView: View,
-            version: Version
-        ) {
+        private fun showPopupWindow(anchorView: View, version: Version) {
             val context = parentFragment.requireActivity()
 
             val viewBinding = ViewVersionManagerBinding.inflate(LayoutInflater.from(context)).apply {
-                val onClickListener = View.OnClickListener { v ->
-                    when (v) {
+                val onClickListener = View.OnClickListener { view ->
+                    when (view) {
                         gotoView -> swapPath(version.getVersionPath().absolutePath)
                         gamePath -> swapPath(version.getGameDir().absolutePath)
                         rename -> VersionsManager.openRenameDialog(context, version)
                         copy -> VersionsManager.openCopyDialog(context, version)
-                        delete -> deleteVersion(version, context.getString(R.string.version_manager_delete_tip, version.getVersionName()))
-                        else -> {}
+                        delete -> deleteVersion(
+                            version,
+                            context.getString(
+                                R.string.version_manager_delete_tip,
+                                version.getVersionName()
+                            )
+                        )
                     }
                     managerPopupWindow.dismiss()
                 }
+
                 gotoView.setOnClickListener(onClickListener)
                 gamePath.setOnClickListener(onClickListener)
                 rename.setOnClickListener(onClickListener)
                 copy.setOnClickListener(onClickListener)
                 delete.setOnClickListener(onClickListener)
             }
+
             managerPopupWindow.apply {
                 viewBinding.root.measure(0, 0)
-                this.contentView = viewBinding.root
-                this.width = viewBinding.root.measuredWidth
-                this.height = viewBinding.root.measuredHeight
+                contentView = viewBinding.root
+                width = viewBinding.root.measuredWidth
+                height = viewBinding.root.measuredHeight
                 showAsDropDown(anchorView, anchorView.measuredWidth, 0)
             }
         }
 
         private fun swapPath(path: String) {
-            val bundle = Bundle()
-            bundle.putString(FilesFragment.BUNDLE_LOCK_PATH, ProfilePathManager.getCurrentPath())
-            bundle.putString(FilesFragment.BUNDLE_LIST_PATH, path)
-            bundle.putBoolean(FilesFragment.BUNDLE_QUICK_ACCESS_PATHS, false)
+            val bundle = Bundle().apply {
+                putString(FilesFragment.BUNDLE_LOCK_PATH, ProfilePathManager.getCurrentPath())
+                putString(FilesFragment.BUNDLE_LIST_PATH, path)
+                putBoolean(FilesFragment.BUNDLE_QUICK_ACCESS_PATHS, false)
+            }
+
             ZHTools.swapFragmentWithAnim(
                 parentFragment,
-                FilesFragment::class.java, FilesFragment.TAG, bundle
+                FilesFragment::class.java,
+                FilesFragment.TAG,
+                bundle
             )
         }
     }
 
     interface OnVersionItemClickListener {
         /**
-         * 用户点击了“收藏”按钮，检查并展示“收藏”弹窗
+         * The user tapped the favorite button. Check and show the favorites dialog.
          */
         fun showFavoritesDialog(versionName: String)
 
         /**
-         * 检查当前版本是否被收藏了
+         * Checks whether the current version has been favorited.
          */
         fun isVersionFavorited(versionName: String): Boolean
     }

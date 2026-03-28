@@ -30,10 +30,16 @@ class LaunchArgs(
     fun getAllArgs(): List<String> {
         val argsList: MutableList<String> = ArrayList()
 
-        argsList.addAll(getJavaArgs())
+        /*argsList.addAll(getJavaArgs())
         argsList.addAll(getMinecraftJVMArgs())
         argsList.add("-cp")
-        argsList.add("${Tools.getLWJGL3ClassPath()}:$launchClassPath")
+        argsList.add("${Tools.getLWJGLClassPathForLaunch()}:$launchClassPath")*/
+        val lwjglComponent = Tools.resolveLWJGLComponentForLaunch(minecraftVersion, versionInfo)
+
+        argsList.addAll(getJavaArgs(lwjglComponent))
+        argsList.addAll(getMinecraftJVMArgs())
+        argsList.add("-cp")
+        argsList.add("${Tools.getLWJGLClassPathForLaunch(minecraftVersion, versionInfo)}:$launchClassPath")
 
         if (runtime.javaVersion > 8) {
             argsList.add("--add-exports")
@@ -47,7 +53,7 @@ class LaunchArgs(
         return argsList
     }
 
-    private fun getJavaArgs(): List<String> {
+    private fun getJavaArgs(lwjglComponent: String): List<String> {
         val argsList: MutableList<String> = ArrayList()
 
         if (AccountUtils.isOtherLoginAccount(account)) {
@@ -65,23 +71,29 @@ class LaunchArgs(
         val configFilePath = if (is7) LibPath.LOG4J_XML_1_7 else LibPath.LOG4J_XML_1_12
         argsList.add("-Dlog4j.configurationFile=${configFilePath.absolutePath}")
 
+        val lwjglNativeDir = File(PathManager.DIR_FILE, "$lwjglComponent/natives/arm64-v8a")
+
+        val nativePathParts = ArrayList<String>()
+
+        if (lwjglNativeDir.exists()) {
+            nativePathParts.add(lwjglNativeDir.absolutePath)
+            argsList.add("-Dorg.lwjgl.librarypath=${lwjglNativeDir.absolutePath}")
+        }
+
         val versionSpecificNativesDir = File(PathManager.DIR_CACHE, "natives/${minecraftVersion.getVersionName()}")
         if (versionSpecificNativesDir.exists()) {
-            val dirPath = versionSpecificNativesDir.absolutePath
-            argsList.add("-Djava.library.path=$dirPath:${PathManager.DIR_NATIVE_LIB}")
-            argsList.add("-Djna.boot.library.path=$dirPath")
+            nativePathParts.add(versionSpecificNativesDir.absolutePath)
+            argsList.add("-Djna.boot.library.path=${versionSpecificNativesDir.absolutePath}")
         }
+
+        nativePathParts.add(PathManager.DIR_NATIVE_LIB)
+        argsList.add("-Djava.library.path=${nativePathParts.joinToString(":")}")
 
         return argsList
     }
 
     private fun getMinecraftJVMArgs(): Array<String> {
         val versionInfo = Tools.getVersionInfo(minecraftVersion, true)
-
-//        // Parse Forge 1.17+ additional JVM Arguments
-//        if (versionInfo.inheritsFrom == null || versionInfo.arguments == null || versionInfo.arguments.jvm == null) {
-//            return emptyArray()
-//        }
 
         val varArgMap: MutableMap<String, String?> = android.util.ArrayMap()
         varArgMap["classpath_separator"] = ":"
@@ -97,11 +109,23 @@ class LaunchArgs(
             }
             it.jvm?.forEach { arg ->
                 if (arg is String) {
-                    minecraftArgs.add(arg.addIgnoreListIfHas())
+                    val normalized = arg.addIgnoreListIfHas()
+                    if (!isConflictingNativeJvmArg(normalized)) {
+                        minecraftArgs.add(normalized)
+                    }
                 }
             }
         }
         return JSONUtils.insertJSONValueList(minecraftArgs.toTypedArray<String>(), varArgMap)
+    }
+
+    private fun isConflictingNativeJvmArg(arg: String): Boolean {
+        return arg.startsWith("-Djava.library.path=") ||
+                arg.startsWith("-Dorg.lwjgl.librarypath=") ||
+                arg.startsWith("-Djna.boot.library.path=") ||
+                arg.startsWith("-Djna.tmpdir=") ||
+                arg.startsWith("-Dorg.lwjgl.system.SharedLibraryExtractPath=") ||
+                arg.startsWith("-Dio.netty.native.workdir=")
     }
 
     private fun getMinecraftClientArgs(): Array<String> {
@@ -123,14 +147,13 @@ class LaunchArgs(
 
         val minecraftArgs: MutableList<String> = ArrayList()
         versionInfo.arguments?.apply {
-            // Support Minecraft 1.13+
             game.forEach { if (it is String) minecraftArgs.add(it) }
         }
 
         return JSONUtils.insertJSONValueList(
             splitAndFilterEmpty(
-                versionInfo.minecraftArguments ?:
-                Tools.fromStringArray(minecraftArgs.toTypedArray())
+                versionInfo.minecraftArguments
+                    ?: Tools.fromStringArray(minecraftArgs.toTypedArray())
             ), verArgMap
         )
     }
@@ -156,7 +179,6 @@ class LaunchArgs(
         fun getCacioJavaArgs(isJava8: Boolean): List<String> {
             val argsList: MutableList<String> = ArrayList()
 
-            // Caciocavallo config AWT-enabled version
             argsList.add("-Djava.awt.headless=false")
             argsList.add("-Dcacio.managed.screensize=" + AWTCanvasView.AWT_CANVAS_WIDTH + "x" + AWTCanvasView.AWT_CANVAS_HEIGHT)
             argsList.add("-Dcacio.font.fontmanager=sun.awt.X11FontManager")
@@ -168,7 +190,7 @@ class LaunchArgs(
             } else {
                 argsList.add("-Dawt.toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit")
                 argsList.add("-Djava.awt.graphicsenv=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment")
-                argsList.add("-javaagent:" + LibPath.CACIO_17_AGENT.getAbsolutePath())
+                argsList.add("-javaagent:" + LibPath.CACIO_17_AGENT.absolutePath)
                 argsList.add("--add-exports=java.desktop/java.awt=ALL-UNNAMED")
                 argsList.add("--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED")
                 argsList.add("--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED")
@@ -184,8 +206,6 @@ class LaunchArgs(
                 argsList.add("--add-opens=java.desktop/sun.font=ALL-UNNAMED")
                 argsList.add("--add-opens=java.desktop/sun.java2d=ALL-UNNAMED")
                 argsList.add("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED")
-
-                // Opens the java.net package to Arc DNS injector on Java 9+
                 argsList.add("--add-opens=java.base/java.net=ALL-UNNAMED")
             }
 
@@ -197,7 +217,6 @@ class LaunchArgs(
             }
 
             argsList.add(cacioClassPath.toString())
-
             return argsList
         }
     }

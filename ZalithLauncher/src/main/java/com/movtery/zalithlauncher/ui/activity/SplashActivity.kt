@@ -126,7 +126,7 @@ class SplashActivity : BaseActivity() {
             toMain()
         }
     }
-    
+
     private fun checkEnd() {
         installableAdapter.checkAllTask()
         Task.runTask {

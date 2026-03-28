@@ -45,6 +45,7 @@ import java.util.List;
  * offering two different ways of accessing your stored data. This would be confusing for users."
  * - <a href="http://developer.android.com/guide/topics/providers/document-provider.html#43">...</a>
  */
+// Basically handles exposing the default DATA directory for the file paths that Java Launcher allows it to expose
 public class FolderProvider extends DocumentsProvider {
 
     private static final String ALL_MIME_TYPES = "*/*";

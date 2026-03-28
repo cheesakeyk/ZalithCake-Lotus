@@ -20,7 +20,21 @@ class UnpackComponentsTask(val context: Context, val component: Components) : Ab
     init {
         runCatching {
             am = context.assets
-            rootDir = if (component.privateDirectory) PathManager.DIR_DATA else PathManager.DIR_GAME_HOME
+            rootDir = when (component) {
+                // Launcher support jars are still consumed from DIR_DATA/components.
+                Components.COMPONENTS -> PathManager.DIR_DATA
+
+                // LWJGL packs are private and should live under context.filesDir.
+                Components.LWJGL3, Components.LWJGL342 -> PathManager.DIR_FILE.absolutePath
+
+                // Everything else keeps its existing location.
+                else -> if (component.privateDirectory) {
+                    PathManager.DIR_FILE.absolutePath
+                } else {
+                    PathManager.DIR_GAME_HOME
+                }
+            }
+
             versionFile = File("$rootDir/${component.component}/version")
             input = am.open("components/${component.component}/version")
         }.getOrElse {
@@ -53,16 +67,34 @@ class UnpackComponentsTask(val context: Context, val component: Components) : Ab
 
     override fun run() {
         listener?.onTaskStart()
-        val fileList = am.list("components/${component.component}")
-        for (fileName in fileList!!) {
-            Tools.copyAssetFile(context, "components/${component.component}/$fileName", "$rootDir/${component.component}", true)
-        }
+        copyAssetDirectoryRecursively(
+            "components/${component.component}",
+            "$rootDir/${component.component}"
+        )
         listener?.onTaskEnd()
+    }
+
+    private fun copyAssetDirectoryRecursively(assetPath: String, outputPath: String) {
+        val entries = am.list(assetPath) ?: return
+
+        if (entries.isEmpty()) {
+            val outFile = File(outputPath)
+            outFile.parentFile?.mkdirs()
+            Tools.copyAssetFile(context, assetPath, outFile.parent ?: return, outFile.name, true)
+            return
+        }
+
+        File(outputPath).mkdirs()
+        for (entry in entries) {
+            val childAssetPath = "$assetPath/$entry"
+            val childOutputPath = "$outputPath/$entry"
+            copyAssetDirectoryRecursively(childAssetPath, childOutputPath)
+        }
     }
 
     private fun requestEmptyParentDir(file: File) {
         file.parentFile!!.apply {
-            if (exists() and isDirectory) {
+            if (exists() && isDirectory) {
                 FileUtils.deleteDirectory(this)
             }
             mkdirs()

@@ -81,7 +81,7 @@ public class Gamepad implements GrabListener, GamepadHandler {
     private long mLastFrameTime;
 
     private final GamepadDataProvider mMapProvider;
-
+    private boolean mRemoved = false;
     public Gamepad(View contextView, InputDevice inputDevice, GamepadDataProvider mapProvider, boolean showCursor){
         if (!EventBus.getDefault().isRegistered(this)) {
             EventBus.getDefault().register(this);
@@ -94,7 +94,7 @@ public class Gamepad implements GrabListener, GamepadHandler {
             @Override
             public void doFrame(long frameTimeNanos) {
                 tick(frameTimeNanos);
-                mScreenChoreographer.postFrameCallback(this);
+                if(!mRemoved) mScreenChoreographer.postFrameCallback(this);
             }
         };
         mScreenChoreographer.postFrameCallback(frameCallback);
@@ -451,5 +451,15 @@ public class Gamepad implements GrabListener, GamepadHandler {
                 sendKeyPress(LwjglGlfwKeycode.GLFW_KEY_SPACE, CallbackBridge.getCurrentMods(), isKeyEventDown);
                 break;
         }
+    }
+    /**
+     * Stops the Gamepad and removes all traces of the Gamepad from the view hierarchy.
+     * After this call, the Gamepad is not recoverable and a new one must be made.
+     */
+    public void removeSelf() {
+        mRemoved = true;
+        mMapProvider.detachGrabListener(this);
+        ViewGroup viewGroup = (ViewGroup) mPointerImageView.getParent();
+        if(viewGroup != null) viewGroup.removeView(mPointerImageView);
     }
 }

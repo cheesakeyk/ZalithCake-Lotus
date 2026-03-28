@@ -45,6 +45,10 @@ class AllSettings {
 
         // Control
         @JvmStatic
+        val gamepadSdlPassthru = BooleanSettingUnit("gamepad_sdl_passthru", false)
+        @JvmStatic
+        val gamepadForcedSdlPassthru = BooleanSettingUnit("gamepad_forcedsdl_passthru", false)
+        @JvmStatic
         val disableGestures = BooleanSettingUnit("disableGestures", false)
 
         @JvmStatic
@@ -66,7 +70,7 @@ class AllSettings {
         val mouseSpeed = IntSettingUnit("mousespeed", 100)
 
         @JvmStatic
-        val virtualMouseStart = BooleanSettingUnit("mouse_start", true)
+        val virtualMouseStart = BooleanSettingUnit("mouse_start", false)
 
         @JvmStatic
         val customMouse = StringSettingUnit("custom_mouse", "")
@@ -133,13 +137,13 @@ class AllSettings {
         val gameMenuMemoryText = StringSettingUnit("gameMenuMemoryText", "M:")
 
         @JvmStatic
-        val gameMenuLocation = StringSettingUnit("gameMenuLocation", "center")
+        val gameMenuLocation = StringSettingUnit("gameMenuLocation", "left_or_bottom")
 
         @JvmStatic
         val gameMenuInfoRefreshRate = IntSettingUnit("gameMenuInfoRefreshRate", 1000)
 
         @JvmStatic
-        val gameMenuAlpha = IntSettingUnit("gameMenuAlpha", 100)
+        val gameMenuAlpha = IntSettingUnit("gameMenuAlpha", 50)
 
         // Launcher
         @JvmStatic
