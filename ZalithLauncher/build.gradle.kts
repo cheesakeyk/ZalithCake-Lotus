@@ -9,7 +9,7 @@ plugins {
 }
 apply(plugin = "stringfog")
 val getCFApiKey = {
-    "\$2a\$10\$RrIlPprgFCiN5Xncl4jTAuIDUy0Gpp2tBDzKoxZunRNuxlgkouSGO"
+    "change your key"
 }
 
 val getBuildType = {
