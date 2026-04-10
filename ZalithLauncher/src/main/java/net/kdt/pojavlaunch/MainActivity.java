@@ -406,6 +406,69 @@ public class MainActivity extends BaseActivity implements
         CallbackBridge.nativeSetWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 0);
         super.onPause();
     }
+    /*@Subscribe(threadMode = ThreadMode.MAIN)
+    public void onJvmExit(JvmExitEvent event) {
+        Logging.i("MainActivity", "JvmExitEvent received, exitCode=" + event.getExitCode());
+
+        isJvmExiting = true;
+        launchRequested.set(false);
+        LaunchGame.resetLaunchState();
+
+        try {
+            CallbackBridge.nativeSetWindowAttrib(LwjglGlfwKeycode.GLFW_FOCUSED, 0);
+            CallbackBridge.nativeSetWindowAttrib(LwjglGlfwKeycode.GLFW_HOVERED, 0);
+            CallbackBridge.nativeSetWindowAttrib(LwjglGlfwKeycode.GLFW_VISIBLE, 0);
+        } catch (Throwable ignored) {
+        }
+
+        if (binding != null) {
+            try {
+                if (binding.mainGameRenderView != null) {
+                    binding.mainGameRenderView.setSurfaceReadyListener(null);
+                    binding.mainGameRenderView.setOnRenderingStartedListener(null);
+                }
+
+                CallbackBridge.removeGrabListener(binding.mainTouchpad);
+                CallbackBridge.removeGrabListener(binding.mainGameRenderView);
+
+                if (binding.mainDrawerOptions != null) {
+                    binding.mainDrawerOptions.closeDrawers();
+                }
+            } catch (Throwable t) {
+                Logging.w("MainActivity", "Failed to clean UI/render state on JVM exit", t);
+            }
+        }
+
+        if (isGameServiceBound) {
+            try {
+                unbindService(this);
+            } catch (IllegalArgumentException ignored) {
+            }
+            isGameServiceBound = false;
+        }
+
+        GameService.setActive(false);
+        stopService(new Intent(this, GameService.class));
+
+        // Only auto-close on a clean successful exit.
+        if (event.getExitCode() == 0) {
+            if (!isFinishing()) {
+                finish();
+            }
+        }
+
+        TaskExecutors.getUIHandler().postDelayed(() -> {
+            try {
+                String processName = android.app.Application.getProcessName();
+                if (processName != null && processName.endsWith(":game")) {
+                    Logging.i("MainActivity", "JvmExitEvent: killing stale :game process");
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                }
+            } catch (Throwable t) {
+                Logging.w("MainActivity", "Failed to kill :game process after JVM exit", t);
+            }
+        }, 300);
+    }*/
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onJvmExit(JvmExitEvent event) {
         Logging.i("MainActivity", "JvmExitEvent received, exitCode=" + event.getExitCode());
@@ -450,21 +513,27 @@ public class MainActivity extends BaseActivity implements
         GameService.setActive(false);
         stopService(new Intent(this, GameService.class));
 
-        if (!isFinishing()) {
-            finish();
+        // Clean quit: close and kill stale :game process so 26.2 relaunch works.
+        if (event.getExitCode() == 0) {
+            if (!isFinishing()) {
+                finish();
+            }
+
+            TaskExecutors.getUIHandler().postDelayed(() -> {
+                try {
+                    String processName = android.app.Application.getProcessName();
+                    if (processName != null && processName.endsWith(":game")) {
+                        Logging.i("MainActivity", "JvmExitEvent: killing stale :game process after clean exit");
+                        android.os.Process.killProcess(android.os.Process.myPid());
+                    }
+                } catch (Throwable t) {
+                    Logging.w("MainActivity", "Failed to kill :game process after clean exit", t);
+                }
+            }, 300);
         }
 
-        TaskExecutors.getUIHandler().postDelayed(() -> {
-            try {
-                String processName = android.app.Application.getProcessName();
-                if (processName != null && processName.endsWith(":game")) {
-                    Logging.i("MainActivity", "JvmExitEvent: killing stale :game process");
-                    android.os.Process.killProcess(android.os.Process.myPid());
-                }
-            } catch (Throwable t) {
-                Logging.w("MainActivity", "Failed to kill :game process after JVM exit", t);
-            }
-        }, 300);
+        // Non-zero exit: do not finish and do not kill.
+        // Let ErrorActivity / crash UI remain visible.
     }
 
     @Override
