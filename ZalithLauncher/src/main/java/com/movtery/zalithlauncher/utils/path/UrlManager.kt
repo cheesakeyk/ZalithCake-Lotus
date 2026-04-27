@@ -25,11 +25,11 @@ class UrlManager {
 
         // Your actual project page used by About screen
         const val URL_HOME: String =
-            "https://github.com/DNAMobileApplications/ZalithLauncherTOWOReborn"
+            "https://github.com/cheesakeyk/ZalithCake-Lotus"
 
         // Your GitHub Releases API used by the updater
         const val URL_GITHUB_RELEASES: String =
-            "https://api.github.com/repos/DNAMobileApplications/ZalithLauncherTOWOReborn/releases"
+            "https://api.github.com/repos/cheesakeyk/ZalithCake-Lotus/releases"
 
         const val URL_MCMOD: String = "https://www.mcmod.cn/"
         const val URL_MINECRAFT: String = "https://www.minecraft.net/"
